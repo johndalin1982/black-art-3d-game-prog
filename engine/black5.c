@@ -459,10 +459,11 @@ int mouseControl(int command, int* x, int* y, int* buttons) {
             int386(MOUSE_INTERRUPT, &inregs, &outregs);
 
             // return number of buttons on this mouse
-            *buttons = outregs.x.ebx;
+            // (see MOUSE_POSITION_BUTTONS for the 16-bit mask rationale)
+            *buttons = outregs.x.ebx & 0xFFFF;
 
             // return success/failure of function
-            return outregs.x.eax;
+            return outregs.x.eax & 0xFFFF;
         }
         break;
 
@@ -511,9 +512,12 @@ int mouseControl(int command, int* x, int* y, int* buttons) {
             int386(MOUSE_INTERRUPT, &inregs, &outregs);
 
             // extract the info and send back to caller via pointers
-            *x = outregs.x.ecx;
-            *y = outregs.x.edx;
-            *buttons = outregs.x.ebx;
+            // mask to 16 bits — real-mode int 33h only sets the low half of
+            // each 32-bit register and the upper half leaks uninitialized
+            // stack garbage from inregs through the int386 translation
+            *x = outregs.x.ecx & 0xFFFF;
+            *y = outregs.x.edx & 0xFFFF;
+            *buttons = outregs.x.ebx & 0xFFFF;
 
             // return success always
             return 1;
@@ -534,8 +538,9 @@ int mouseControl(int command, int* x, int* y, int* buttons) {
             int386(MOUSE_INTERRUPT, &inregs, &outregs);
 
             // extract the info and send back to caller via pointers
-            *x = outregs.x.ecx;
-            *y = outregs.x.edx;
+            // (see MOUSE_POSITION_BUTTONS for the 16-bit mask rationale)
+            *x = outregs.x.ecx & 0xFFFF;
+            *y = outregs.x.edx & 0xFFFF;
 
             // return success
             return 1;
