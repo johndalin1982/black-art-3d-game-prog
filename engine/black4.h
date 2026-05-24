@@ -24,6 +24,7 @@
 
 extern unsigned char FAR* RomCharSet;
 extern unsigned char FAR* DoubleBuffer;
+extern unsigned int DoubleBufferSize;   // total size of buffer in bytes
 
 // this is the typedef for a bitmap
 typedef struct BitmapType {

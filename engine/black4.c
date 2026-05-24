@@ -312,7 +312,7 @@ void fillDoubleBuffer(int color) {
         mov edi, DoubleBuffer       ; load flat pointer
         shr ecx, 1                  ; convert word count to dword count
         rep stosd                   ; fill with dwords (2x faster)
-        
+
         ; handle odd word if size was odd
         mov ecx, size
         and ecx, 1                  ; check if size was odd
@@ -345,7 +345,7 @@ void displayDoubleBuffer(unsigned char FAR* buffer, int y) {
         mov esi, buffer             ; load source flat pointer
         shr ecx, 1                  ; convert word count to dword count
         rep movsd                   ; move dwords (4 bytes at a time - 2x faster)
-        
+
         mov ecx, size               ; handle odd word if size was odd
         and ecx, 1
         rep movsw                   ; move remaining word if any
@@ -1069,7 +1069,7 @@ void fwordcpy(void FAR* destination, void FAR* source, int numWords) {
         mov ecx, numWords           ; number of words
         shr ecx, 1                  ; convert word count to dword count
         rep movsd                   ; copy dwords (4 bytes at a time - 2x faster!)
-        
+
         mov ecx, numWords           ; handle odd word if numWords was odd
         and ecx, 1                  ; check if odd
         rep movsw                   ; copy remaining word if any

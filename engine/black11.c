@@ -53,8 +53,11 @@ Sprite Textures; // this holds the textures
 
 int loadPaletteDisk(char* filename, RgbPalettePtr palette) {
     // this function loads a color palette from disk
-    int index;
+
+    int index;  // used for looping
+
     RgbColor color;
+
     FILE* fp;
 
     // open the disk file
@@ -65,12 +68,12 @@ int loadPaletteDisk(char* filename, RgbPalettePtr palette) {
     // load in all the colors
     for (index = 0; index <= 255; index++) {
         // get the next color
-        fscanf(fp, "%d %d %d", &color.red, &color.green, &color.blue);
+        fscanf(fp, "%hhu %hhu %hhu", &color.red, &color.green, &color.blue);
 
         // store the color in next element of palette
-        palette->colors[index].red = color.red;
+        palette->colors[index].red   = color.red;
         palette->colors[index].green = color.green;
-        palette->colors[index].blue = color.blue;
+        palette->colors[index].blue  = color.blue;
     }
 
     // set palette size to a full palette
@@ -577,7 +580,7 @@ void worldToCameraObject(ObjectPtr object) {
     int index;
 
     // iterate thru all vertices of object and transform them into camera coordinates
-    for (index = 0; index <= object->numVertices; index++) {
+    for (index = 0; index < object->numVertices; index++) {
         // multiply the point by the viewing transformation matrix
 
         // x component
