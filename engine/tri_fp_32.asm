@@ -46,12 +46,18 @@ LOCAL xsF:DWORD, xeF:DWORD, dxLeftF:DWORD, dxRightF:DWORD, xs:DWORD, xe:DWORD
 
 beginLine:
 
+    ; arithmetic shift (sar) — fixed-point dxLeftF can round 1 LSB more negative
+    ; than the mathematical slope, so xsF can accumulate to a tiny negative at
+    ; the last row of a triangle whose left edge ends at x=0.  logical shr would
+    ; convert e.g. xsF=-2 to xs=65535, and the rep stosw count below would
+    ; underflow to ~2 billion and write 4 GB of garbage.  sar keeps the sign so
+    ; xs becomes -1 and the asm produces at worst a single stray pixel one row up.
     mov eax, xsF            ; get whole part of xsF into xs
-    shr eax, 16
+    sar eax, 16
     mov xs, eax
 
     mov eax, xeF            ; get whole part of xeF into xe
-    shr eax, 16
+    sar eax, 16
     mov xe, eax
 
     mov edi, dest           ; edi = start of line (flat pointer)
