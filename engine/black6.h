@@ -8,7 +8,7 @@
 #define SEQUENCE_STOPPED        0   // the current sequence is stopped
 #define SEQUENCE_PLAYING        1   // the current sequence is playing
 #define SEQUENCE_COMPLETE       2   // the current sequence has completed
-# define SEQUENCE_UNAVAILABLE    0   // this sequence is unavailable
+#define SEQUENCE_UNAVAILABLE    0   // this sequence is unavailable
 
 // these return values are used to determine what happened when a midi file
 // has been registered
