@@ -76,7 +76,7 @@
 // fixed point stuff
 
 #define FP_SHIFT                16          // 16:16 format
-#define FP_SCALE                65526L      // 2^16 = 65536, used to convert floats
+#define FP_SCALE                65536L      // 2^16 = 65536, used to convert floats
 
 typedef float Matrix4x4[4][4];  // the standard 4x4 homogenous matrix
 

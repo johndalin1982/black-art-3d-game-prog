@@ -934,7 +934,16 @@ int plgLoadObject(
     }
 
     // extract object name and number of vertices and polygons
-    sscanf(buffer, "%s %d %d", objectName, &totalVertices, &totalPolys);
+    sscanf(buffer, "%31s %u %u", objectName, &totalVertices, &totalPolys);
+
+    // reject objects that wouldn't fit in the fixed-size object arrays
+    if (totalVertices > MAX_VERTICES_PER_OBJECT ||
+        totalPolys    > MAX_POLYS_PER_OBJECT) {
+        printf("PLG file %s exceeds object capacity (%u verts, %u polys)",
+               filename, totalVertices, totalPolys);
+        fclose(fp);
+        return 0;
+    }
 
     // set proper fields in object
     object->numVertices = totalVertices;
@@ -999,7 +1008,8 @@ int plgLoadObject(
             return 0;
         }
 
-        if ((numVertices = atoi(token)) == 0) {
+        if ((numVertices = atoi(token)) == 0 ||
+             numVertices > MAX_POINTS_PER_POLY) {
             printf("Error with PLG file (number of vertices) %s", filename);
             fclose(fp);
             return 0;

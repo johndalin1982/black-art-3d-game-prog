@@ -68,18 +68,18 @@ unsigned char FAR* VideoBuffer = (unsigned char FAR*)0xA0000000L;
 void timeDelay(int clicks) {
     // this function uses the internal timer to delay a number of clock ticks
 #ifdef DOS_32_BIT
-    long FAR* clock = (long FAR*)0x0000046C;
+    volatile long FAR* clock = (volatile long FAR*)0x0000046C;
 #else
-    long FAR* clock = (long FAR*)0x0000046CL;
+    volatile long FAR* clock = (volatile long FAR*)0x0000046CL;
 #endif
 
-    unsigned long now;
+    long now;
 
     // get current time
     now = *clock;
 
     // wait for number of click to pass
-    while (abs(*clock - now) < clicks) {}
+    while (labs(*clock - now) < clicks) {}
 }
 
 void setGraphicsMode(int mode) {

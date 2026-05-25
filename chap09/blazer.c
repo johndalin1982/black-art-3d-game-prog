@@ -3758,7 +3758,7 @@ int getModemString(char* buffer) {
     }
 
     // else load in modem initialization string
-    fscanf(fp, "%s", buffer);
+    fscanf(fp, "%63s", buffer);
 
     // close the file
     fclose(fp);

@@ -144,6 +144,13 @@ unsigned char getScanCode(void) {
         xor ax,ax       ; a key was retrieved so write a 0 into ax to reflect this
     Done:
     }
+#ifdef DOS_32_BIT
+    // in 32-bit, the caller reads the return from EAX — clear the upper 16 bits
+    // so callers that widen the return to int don't see leftover garbage
+    _asm {
+        movzx eax, ax
+    }
+#endif
 
     // 8 or 16 bit data is returned in AX, hence no need to explicitly say return()
 }

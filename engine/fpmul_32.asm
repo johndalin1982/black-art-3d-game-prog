@@ -11,9 +11,10 @@ PUBLIC fpMul       ; export function name to linker
 fpMul PROC C multiplier:DWORD, multiplicand:DWORD
 
     mov eax, multiplicand   ; move multiplicand into eax
-    imul multiplier         ; multiply by multiplier, result edx:eax
-    shr eax, 16             ; shift the integer half of the 16:16 product
-                            ; down into the low 32 bits of the return value
+    imul multiplier         ; signed 32x32 -> 64-bit result in edx:eax
+    shrd eax, edx, 16       ; the 16:16 fixed-point result lives in bits 16..47
+                            ; of edx:eax — shift it down into eax (shrd brings
+                            ; the low 16 bits of edx into the high 16 bits of eax)
     ret                     ; return to caller (result in eax)
 
 fpMul ENDP
