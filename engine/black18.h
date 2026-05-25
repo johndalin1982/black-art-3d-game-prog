@@ -206,7 +206,10 @@ int plgLoadObject(ObjectPtr object, char* filename, float scale);
 
 void clipObject3D(ObjectPtr object, int mode);
 
-void removeBackfacesAndShade(ObjectPtr object);
+// chap18: removeBackfacesAndShade gains a forceColor parameter so the caller
+// can override per-polygon shade computation with a fixed color (used by
+// the wireframe-only and special-fx code paths in krk)
+void removeBackfacesAndShade(ObjectPtr object, int forceColor);
 
 int removeObject(ObjectPtr object, int mode);
 
@@ -245,6 +248,17 @@ void triangleLine(
     int color);
 
 void makeGreyPalette(void);
+
+// chap18: new 2D line clipper and rasterizer used by drawObjectWire
+int clipLine(int* x1, int* y1, int* x2, int* y2);
+
+void drawLine(
+    int xo, int yo,
+    int x1, int y1,
+    unsigned char color,
+    unsigned char FAR* videoBufferStart);
+
+void drawObjectWire(ObjectPtr object, int color);
 
 // new 32 bit functions
 
