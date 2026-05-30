@@ -1,0 +1,231 @@
+# Black Art of 3D Game Programming — modernized port
+
+A hand-converted port of every demo and engine module from André LaMothe's 1995 book *Black Art of 3D Game Programming*, built with **Open Watcom 2.0 beta** and targeting both **16-bit real-mode DOS** and **32-bit DOS/4GW protected mode**. Every chapter demo from the original CD has been reformatted into a consistent modern coding style, and the engine has been audited and patched for latent bugs that the original code carried.
+
+## Table of contents
+
+- [What this is](#what-this-is)
+- [Build requirements](#build-requirements)
+- [Repository layout](#repository-layout)
+- [Engine modules](#engine-modules)
+- [Chapter demos](#chapter-demos)
+- [Coding style](#coding-style)
+- [Notable fixes vs. the book code](#notable-fixes-vs-the-book-code)
+- [16-bit vs. 32-bit builds](#16-bit-vs-32-bit-builds)
+- [Building](#building)
+- [Running under DOSBox-X](#running-under-dosbox-x)
+- [Audio](#audio)
+- [Credits and license](#credits-and-license)
+
+## What this is
+
+LaMothe's *Black Art of 3D Game Programming* (1995, Waite Group Press) was the canonical "how to write a 3D engine in DOS" tome of the era. The book's CD shipped with full source for a software rasterizer engine, a series of chapter-by-chapter demos building up to that engine, and two complete game demos:
+
+- **Starblazer 3-D** (chapter 17) — asteroids-style first-person 3D space shooter
+- **Kill or Be Killed** (chapter 18) — mech-vs-aliens 3D action game with HUD, inventory, modem multiplayer
+
+This repository is a faithful port of all of that material to **Open Watcom 2.0 beta** (community fork) with a consistent modern C99 coding style, building as Watcom IDE projects (`.wpj` / `.tgt`). Both real-mode 16-bit (Watcom IDE system identifier `de6en`) and DOS/4GW 32-bit (`dr2en`) variants exist for the larger demos.
+
+## Build requirements
+
+- **Open Watcom 2.0 beta** — the community fork from [github.com/open-watcom/open-watcom-v2](https://github.com/open-watcom/open-watcom-v2). The official 1.9 release does not have sufficient C99 support.
+- **DOSBox-X** to run the binaries (see [Running under DOSBox-X](#running-under-dosbox-x) for why). 32-bit builds run under DOS/4GW (bundled with Watcom).
+- Watcom IDE for opening `.wpj` project files.
+
+The toolchain assumes 16-bit medium model for the original chapter demos and 32-bit flat model for the `ch*_32/` variants.
+
+## Repository layout
+
+```
+blackart3d/
+├── README.md                            # this file
+├── .gitignore                           # excludes build artifacts (.obj, .exe, .lst, .map, etc.)
+├── .gitattributes
+├── engine/                              # shared engine library
+│   ├── black3.{c,h}                     # video / palette / BIOS / mode 13h + Mode Z
+│   ├── black4.{c,h}                     # double buffer, bitmaps, sprites, PCX
+│   ├── black5.{c,h}                     # keyboard ISR, mouse, joystick
+│   ├── black6.{c,h}                     # DIGPAK / MIDPAK sound and music
+│   ├── black8.{c,h}                     # timer
+│   ├── black9.{c,h}                     # serial / modem
+│   ├── black11.{c,h}                    # 3D engine — chap11 snapshot
+│   ├── black15.{c,h}                    # 3D engine — chap15 snapshot (BSP + Mode-Z)
+│   ├── black17.{c,h}                    # 3D engine — chap17 snapshot (mode 13h pipeline)
+│   ├── black18.{c,h}                    # 3D engine — chap18 snapshot (krk additions)
+│   ├── *.asm                            # 16-bit assembly inner loops
+│   └── *_32.asm                         # 32-bit flat-mode assembly inner loops
+├── chap02/ – chap18/                    # 16-bit demos for each chapter
+├── ch09_32, ch14_32, ch15_32,           # 32-bit DOS/4GW project variants
+│   ch16_32, ch17_32/
+├── audio/                               # DIGPAK / MIDPAK driver TSRs and patch files
+└── exp_font/                            # utility — dumps the BIOS 8x8 ROM font to font.bin
+                                         # (needed by 32-bit builds since flat mode can't reach 0xF000:FA6E)
+```
+
+## Engine modules
+
+The engine is split across multiple `black*` modules following the book's chapter progression. Each chapter's snapshot of the engine is preserved (chap11, chap15, chap17, chap18) because the book's APIs and structs evolve as it goes — a later chapter's engine isn't always a strict superset of an earlier one.
+
+| Module | Purpose | Key APIs |
+|---|---|---|
+| `black3` | VGA mode 13h / Mode Z, palette, BIOS access, vertical/horizontal lines, fonts | `setGraphicsMode`, `setModeZ`, `writePalette`, `lineH/V`, `printString` |
+| `black4` | Double buffering, bitmaps, PCX loading, sprites | `createDoubleBuffer`, `pcxLoad`, `spriteInit`, `spriteDraw` |
+| `black5` | Keyboard ISR (custom INT 9 handler), mouse via INT 33h, joystick port | `keyboardInstallDriver`, `KeyboardState[]`, `mouseControl`, `getScanCode` |
+| `black6` | DIGPAK (.VOC) sound and MIDPAK (.XMI) music via INT 66h TSRs | `soundLoad`, `soundPlay`, `musicLoad`, `musicPlay` — 16-bit only |
+| `black8` | BIOS timer queries and PIT reprogramming | `timerQuery`, `timerProgram` |
+| `black9` | Serial port ISR and modem AT command driver | `serialOpen`, `modemDial`, `modemAnswer` |
+| `black11` | First full 3D engine: object loader (.PLG), matrix math, shading | `plgLoadObject`, `rotateObject`, `removeBackfacesAndShade`, `drawPolyList` |
+| `black15` | Adds BSP trees, Mode-Z renderer, Z-sorted painter's algorithm | `bspBuild`, `bspTraverse`, `drawPolyListZ` |
+| `black17` | Mode 13h pipeline with assembly inner loops, DOS/4GW additions | `fillDoubleBuffer32`, `displayDoubleBuffer32`, `triangleAsm` |
+| `black18` | Chap17 engine + line clipper, wireframe, force-color shading | `clipLine`, `drawLine`, `drawObjectWire`, `removeBackfacesAndShade(obj, forceColor)` |
+
+## Chapter demos
+
+### 16-bit demos (every chapter)
+
+| Chapter | Demo | Description |
+|---|---|---|
+| 2 | `guess.c`, `light.c` | First C programs — number guessing, color cycling |
+| 3 | `light.c`, `mode13.c`, `modez.c` | Video mode setup, mode 13h, Mode Z (320×400) |
+| 4 | `pcxdemo.c`, `alien.c`, `worms.c`, `speed.c`, `spheres.c` | Bitmaps, PCX images, double buffering benchmarks |
+| 5 | `keytest.c`, `joytest.c`, `mousetst.c`, `ship.c` | Input device tests |
+| 6 | `digidemo.c`, `mididemo.c` | Sound (.VOC) and music (.XMI) playback |
+| 7 | `critters.c`, `floater.c`, `jumper.c`, `lockon.c`, `lostnspc.c` | Sprite animation demos |
+| 8 | `timer.c`, `vblank.c`, `jelly.c`, `volcano.c` | Timer ISR, vertical blank, palette animation |
+| 9 | `term1.c`, `term2.c`, **`blazer.c`** | Modem terminal builds up to **Hover Blazer** — modem multiplayer game |
+| 11 | `linedemo.c`, `wiredemo.c` | First 3D wireframe demos |
+| 12 | `tridemo.c`, `solidemo.c`, `gourdemo.c`, `textdemo.c` | Flat-shaded, Gouraud, textured triangles |
+| 13 | `sol2demo.c` | Solid-shaded multiple objects |
+| 14 | `objects.c` | Multiple PLG object loading and rendering |
+| 15 | `bspdemo.c`, `sortdemo.c`, `solzdemo.c`, `zdemo.c` | BSP tree, Z sorting, Mode Z renderer |
+| 16 | **`voxel.c`**, **`voxtile.c`**, **`voxopt.c`** | Comanche-style heightmap terrain (3 variants) |
+| 17 | **`blaze3d.c`** | **Starblazer 3-D** — first-person 3D space shooter |
+| 18 | **`krk.c`** | **Kill or Be Killed** — full 3D action game with HUD |
+
+### 32-bit DOS/4GW demos
+
+The larger demos (and chapters that benefit from flat-mode memory) have parallel 32-bit Watcom projects in `ch*_32/`:
+
+| Directory | Project | Source | Notes |
+|---|---|---|---|
+| `ch09_32/` | `blazer32` | `../chap09/blazer.c` | Hover Blazer — audio stubbed under `#ifndef DOS_32_BIT` |
+| `ch14_32/` | `obj_32` | `../chap14/objects.c` | |
+| `ch15_32/` | `bsp_32`, `sort_32`, `solz_32`, `zdemo_32` | `../chap15/*.c` | |
+| `ch16_32/` | `vox_32`, `voxt_32`, `voxo_32` | `../chap16/{voxel,voxtile,voxopt}.c` | |
+| `ch17_32/` | `blz3d_32` | `../chap17/blaze3d.c` | Includes `_32.asm` rasterizer files |
+
+## Coding style
+
+The original book code uses snake_case names, K&R braces with separate-line opens, and `// end Foo` trailing comments. This port consistently uses:
+
+- **Types**: `PascalCase` with a `*Ptr` companion typedef. `Sprite`, `SpritePtr`. `Point3D`, `Point3DPtr`.
+- **Functions**: `lowerCamelCase`. `spriteInit`, `rotateObject`, `pcxGetSprite`.
+- **Globals**: `PascalCase`. `ViewPoint`, `ColorPalette3D`, `KeyboardState`.
+- **Local variables / parameters**: `lowerCamelCase`. `currPoly`, `tempX`.
+- **Struct fields**: `lowerCamelCase`. `.worldPos`, `.currFrame`, `.numPolys`.
+- **Constants / `#define`s**: `UPPER_SNAKE_CASE`. `MAX_OBJECTS`, `SHADE_BLUE`.
+- **Indent**: 4 spaces. K&R braces. `*` attached to the type, not the variable. Uppercase `FAR` macro.
+- **No trailing `// end Foo` comments.** No `///////` separator lines between functions.
+
+## Notable fixes vs. the book code
+
+The port surfaced a number of latent bugs in the original 1995 source. Most were dormant in 16-bit mode but easy to trigger. Each was fixed in this port; the C-level logic of the affected functions is otherwise faithful to the book.
+
+### Critical (caused crashes or memory corruption)
+
+- **`loadPaletteDisk` buffer overflow** ([engine/black11.c](engine/black11.c), [engine/black17.c](engine/black17.c)) — `fscanf("%d %d %d", &color.red, &color.green, &color.blue)` where the targets are `unsigned char`. `%d` writes `sizeof(int)` bytes per argument — 2 bytes in 16-bit (already corrupting adjacent fields), 4 in 32-bit (9-byte stack overwrite per call × 256 iterations). The fix uses the C99 `%hhu` length modifier so each scan writes exactly one byte.
+- **`clipObject3D` near-plane test too lenient** ([engine/black17.c](engine/black17.c)) — used AND across all four vertex z's instead of OR. Polygons that *straddled* the near plane were left for the perspective divide, which then produced wild projected coordinates from near-zero z values and fed those into the rasterizer. Changed to OR so any vertex behind the near plane clips the whole polygon.
+
+### Bounds checks (caused crashes on edge inputs)
+
+- **`plgLoadObject` PLG loader** ([engine/black11.c](engine/black11.c), [engine/black17.c](engine/black17.c)) — added explicit bounds checks on `totalVertices`, `totalPolys`, and per-polygon `numVertices` against the engine's `MAX_*` limits. Original would happily write past fixed-size arrays if a hand-edited PLG declared more vertices than allowed.
+- **`fscanf("%s", ...)` width limits** — added `%31s` / `%63s` modifiers where the destination is a fixed-size stack buffer (PLG object names, modem init strings). Prevents stack buffer overflow from a long token in a hand-edited file.
+- **`lineVDb` in voxel demos** ([chap16/voxel.c](chap16/voxel.c), [chap16/voxtile.c](chap16/voxtile.c)) — clipped `y1`/`y2` to `[0, 199]` before computing the write offset into `DoubleBuffer`. At low altitudes with high `MountainScale`, the computed `top` could go significantly negative, producing a write address well before the buffer.
+
+### Algorithmic / state
+
+- **`FP_SCALE` typo** ([engine/black17.h](engine/black17.h)) — defined as `65526L` instead of `65536L`. Comment even said `2^16 = 65536`. No active C call sites used the macro (the asm uses a literal `65536.0`), but the value was off by 10. Fixed.
+- **`timeDelay` missing `volatile`** ([engine/black3.c](engine/black3.c)) — BIOS tick counter at `0x46C` was read in a busy-wait loop without a `volatile` qualifier. Under release compiler flags the read could be hoisted out of the loop, hanging forever. Added `volatile`, switched `abs` to `labs` since the counter is `long`.
+- **Voxel demos U/D/F/C key clamps** ([chap16/voxel.c](chap16/voxel.c), [chap16/voxtile.c](chap16/voxtile.c), [chap16/voxopt.c](chap16/voxopt.c)) — pressing the height (`U`/`D`) or focal-length (`F`/`C`) keys far enough would drive `PlayZ` into the `[51, 100]` range where the perspective formula `playDist * playZ / (playZ - rowInv)` divides by zero, or grow the product past 16-bit `int` range. Added clamps `PlayZ ∈ [110, 1000]` and `PlayDist ∈ [10, 1000]`, and promoted the multiplication to float to prevent integer overflow.
+- **`voxopt.c` stale ray-length table** ([chap16/voxopt.c](chap16/voxopt.c)) — the book's optimization precomputed a per-row ray-length table once at startup, then the U/D/F/C keys updated `PlayZ`/`PlayDist` but the table was never refreshed. Pressing the keys had no visual effect. Added a per-frame `rebuildRayLengths()` call so the keys actually do something.
+- **`light.c` WEST wrap typo** ([chap02/light.c](chap02/light.c), [chap03/light.c](chap03/light.c)) — book bug inherited from `MSC/CHAP_2/LIGHT.C`: in the WEST case of the direction switch, `if (--playerX < 0) playerY = 319;` set the *Y* coordinate to 319 (off-screen) instead of wrapping *X* to 319. Turning left from the start sent the light cycle off the visible area and made the demo look frozen. Fixed to `playerX = 319;`.
+
+## 16-bit vs. 32-bit builds
+
+### What changes between builds
+
+- **Memory model**: 16-bit medium model (separate code/data segments, FAR pointers explicit) vs. 32-bit flat (one 4 GB linear address space).
+- **`int` size**: 16-bit (2 bytes) vs. 32-bit (4 bytes). Several book bugs were latent in 16-bit because `int` arithmetic stayed in 16-bit range; they manifested when `int` grew to 32 bits and the same overflow patterns produced larger out-of-range values.
+- **Far pointers**: `FAR` is a real keyword in 16-bit, a no-op macro in 32-bit. Pointer construction via `_FP_SEG`/`_FP_OFF` doesn't work in 32-bit; the code uses `MK_FP` from `<dos.h>` instead.
+- **VGA buffer**: `0xA0000000` (real-mode segment:offset) in 16-bit vs. `0xA0000` (flat linear address) in 32-bit.
+- **ROM character set**: at `0xF000:FA6E` in real mode. In 32-bit flat mode that address is unreachable — the `exp_font/` utility extracts the font to `font.bin` and 32-bit builds load it via `initRomCharSet`.
+- **Inner-loop rasterizers**: 16-bit uses `.asm` files (`fpdiv`, `qcpy`, `tri_fp`, etc.); 32-bit uses parallel `_32.asm` files (`fpdiv_32`, `qcpy_32`, `tri_fp_32`). The 32-bit asm explicitly preserves callee-saved registers via Watcom's `USES` clause.
+- **Sound / music**: DIGPAK and MIDPAK are real-mode TSRs hooked via INT 66h, fundamentally incompatible with DOS/4GW protected-mode reflection. `chap09/blazer.c` wraps every audio call in `#ifndef DOS_32_BIT`, so the 32-bit Hover Blazer build runs silent.
+- **The `DOS_32_BIT` macro** is defined by the 32-bit Watcom project files and gates the per-platform variant code.
+
+### What stays the same
+
+- All chapter `.c` files are *shared* between their 16-bit and 32-bit projects. The `.tgt` for each project just points to the same `chap*/foo.c`.
+- The engine `.c` files are also shared.
+- Compilation produces different `.exe` formats: MZ (real-mode 16-bit) vs. LE (Linear Executable for DOS/4GW). The LE binary has a bound MZ stub that locates and invokes `dos4gw.exe`.
+
+## Building
+
+Open the `.wpj` for the demo you want in Open Watcom IDE and choose Build → Make Target.
+
+```
+chap17/blaze3d.wpj          # 16-bit Starblazer 3-D
+ch17_32/blz3d_32.wpj        # 32-bit Starblazer 3-D
+chap18/krk.wpj              # 16-bit Kill or Be Killed
+chap16/voxel.wpj            # 16-bit voxel terrain (Comanche-style)
+ch16_32/voxo_32.wpj         # 32-bit optimized voxel
+...
+```
+
+Each chapter's project includes the necessary engine modules (`black3.c`, `black4.c`, ...). 32-bit projects also include the `_32.asm` files when needed.
+
+The 16-bit projects produce ~50–100 KB MZ `.exe`s. The 32-bit projects produce a small MZ stub + the LE body, requiring `dos4gw.exe` (bundled in the project directories) at runtime.
+
+## Running under DOSBox-X
+
+**Use DOSBox-X, not vanilla DOSBox.** Vanilla DOSBox has incomplete emulation of the DOS System File Table (SFT) and a low default limit on simultaneously open file handles. Games like Hover Blazer and Kill or Be Killed open dozens of asset files (PCX backgrounds, VOC sound effects, XMI music, PLG models) at startup, and several of them keep file handles open across scenes. Under vanilla DOSBox this can cause apparent crashes or silent failures partway through a game's load sequence.
+
+DOSBox-X reworked SFT emulation (dynamic allocation, per the DOSBox-X release notes) and is the more compatible host for any of the larger book demos. Get it from [dosbox-x.com](https://dosbox-x.com).
+
+If for some reason you must use vanilla DOSBox, raise `files=` in your `dosbox.conf` to its maximum value (255) — but DOSBox-X is the recommended path.
+
+## Audio
+
+The book uses two commercial 1990s sound libraries:
+
+- **DIGPAK** (John Ratcliff, The Audio Solution) — digital sound effects playback from `.VOC` files
+- **MIDPAK** — XMIDI music playback to AdLib, Sound Blaster, Roland MT-32, General MIDI, and other supported synths
+
+Both are real-mode DOS TSRs that must be loaded *before* the game starts. The drivers ship in [audio/DRIVERS/](audio/DRIVERS/) (sound-card-specific drivers, MIDPAK variants for different synths) and patch sets in [audio/PATCHES/](audio/PATCHES/).
+
+To enable audio for a 16-bit demo that uses sound (chap06 demos, chap09's Hover Blazer):
+
+1. Load the digital sound driver:
+   ```
+   SOUNDRV.COM
+   ```
+2. Load the music driver:
+   ```
+   MIDPAK.COM
+   ```
+3. Run the game. Pass any sound/music command-line switches the game expects (Hover Blazer takes `S` and `M` — e.g. `blazer s m` for both digital effects and music).
+
+The TSRs hook INT 66h; the engine calls them via inline assembly stubs in `engine/black6.c`.
+
+### Music file format
+
+MIDPAK plays **XMIDI (`.XMI`)** files only — it does not play standard `.MID` files. The original book CD shipped 17 `.XMI` files for the chap06 sound/music chapter; in this repo they live in [MSC/CHAP_6/DRIVERS/](MSC/CHAP_6/DRIVERS/) (TITLE.XMI, MARIO.XMI, FUNK.XMI, etc.). To exercise `chap06/mididemo.c`, copy one or more of those into `chap06/` and enter the filename when the menu prompts. The Hover Blazer soundtrack (`chap06/BLAZEMUS.XMI`, also used by `chap09/blazer.c`) is the only `.XMI` already present in `chap06/`.
+
+32-bit DOS/4GW builds run silent. INT 66h reflection from protected mode back to real-mode TSRs is not supported by DOS/4GW, so the audio call sites in `chap09/blazer.c` are wrapped in `#ifndef DOS_32_BIT` and skipped in the 32-bit build.
+
+## Credits and license
+
+- **Original code**: André LaMothe / Waite Group Press, 1995 (Black Art of 3D Game Programming book/CD)
+- **Conversion to modern coding style + bug fixes**: this repository's contributor
+
+The original 1995 source was bundled with the book and CD. This port restructures it for modern toolchains; the underlying algorithms and architecture remain LaMothe's. If you want to learn how 3D rendering worked before GPUs, read the book; it's still in print as a used book and the techniques are foundational.
