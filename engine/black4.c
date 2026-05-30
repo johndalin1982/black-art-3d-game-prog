@@ -1274,7 +1274,7 @@ void setVisualPageModeZ(int page) {
         // to point at page 1 @ 0xA000:8000
 
         // first low byte of address
-        outp(CRT_CONTROLLER, CRT_ADDR_HI);
+        outp(CRT_CONTROLLER, CRT_ADDR_LOW);
         outp(CRT_CONTROLLER + 1, 0x00);
 
         // now high byte

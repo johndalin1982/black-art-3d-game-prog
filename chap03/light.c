@@ -139,7 +139,7 @@ void main(void) {
             case WEST:
             {
                 if (--playerX < 0) {
-                    playerY = 319;
+                    playerX = 319;
                 }
 
                 break;
