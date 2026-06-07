@@ -26,6 +26,10 @@ LaMothe's *Black Art of 3D Game Programming* (1995, Waite Group Press) was the c
 
 This repository is a faithful port of all of that material to **Open Watcom 2.0 beta** (community fork) with a consistent modern C99 coding style, building as Watcom IDE projects (`.wpj` / `.tgt`). Both real-mode 16-bit (Watcom IDE system identifier `de6en`) and DOS/4GW 32-bit (`dr2en`) variants exist for the larger demos.
 
+The book and its CD is digitally available on the archive.org website:
+- https://archive.org/details/BlackArt3DEBook
+- https://archive.org/details/BlackArtOf3DGameProgramming
+
 ## Build requirements
 
 - **Open Watcom 2.0 beta** — the community fork from [github.com/open-watcom/open-watcom-v2](https://github.com/open-watcom/open-watcom-v2). The official 1.9 release does not have sufficient C99 support.
