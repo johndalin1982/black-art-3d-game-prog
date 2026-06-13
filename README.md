@@ -75,7 +75,8 @@ The engine is split across multiple `black*` modules following the book's chapte
 | `black3` | VGA mode 13h / Mode Z, palette, BIOS access, vertical/horizontal lines, fonts | `setGraphicsMode`, `setModeZ`, `writePalette`, `lineH/V`, `printString` |
 | `black4` | Double buffering, bitmaps, PCX loading, sprites | `createDoubleBuffer`, `pcxLoad`, `spriteInit`, `spriteDraw` |
 | `black5` | Keyboard ISR (custom INT 9 handler), mouse via INT 33h, joystick port | `keyboardInstallDriver`, `KeyboardState[]`, `mouseControl`, `getScanCode` |
-| `black6` | DIGPAK (.VOC) sound and MIDPAK (.XMI) music via INT 66h TSRs | `soundLoad`, `soundPlay`, `musicLoad`, `musicPlay` — 16-bit only |
+| `black6` | DIGPAK (.VOC) sound and MIDPAK (.XMI) music via INT 66h TSRs | `soundLoad`, `soundPlay`, `musicLoad`, `musicPlay` — works in 16-bit and 32-bit (32-bit bridges through `engine/dpmi.c`) |
+| `dpmi`   | 32-bit only: DPMI INT 31h bridge to real-mode TSRs and DOS conventional memory | `dpmiRealModeInt`, `dpmiAllocDos`, `dpmiFreeDos`, `dpmiVectorInstalled` |
 | `black8` | BIOS timer queries and PIT reprogramming | `timerQuery`, `timerProgram` |
 | `black9` | Serial port ISR and modem AT command driver | `serialOpen`, `modemDial`, `modemAnswer` |
 | `black11` | First full 3D engine: object loader (.PLG), matrix math, shading | `plgLoadObject`, `rotateObject`, `removeBackfacesAndShade`, `drawPolyList` |
@@ -164,7 +165,9 @@ The port surfaced a number of latent bugs in the original 1995 source. Most were
 - **VGA buffer**: `0xA0000000` (real-mode segment:offset) in 16-bit vs. `0xA0000` (flat linear address) in 32-bit.
 - **ROM character set**: at `0xF000:FA6E` in real mode. In 32-bit flat mode that address is unreachable — the `exp_font/` utility extracts the font to `font.bin` and 32-bit builds load it via `initRomCharSet`.
 - **Inner-loop rasterizers**: 16-bit uses `.asm` files (`fpdiv`, `qcpy`, `tri_fp`, etc.); 32-bit uses parallel `_32.asm` files (`fpdiv_32`, `qcpy_32`, `tri_fp_32`). The 32-bit asm explicitly preserves callee-saved registers via Watcom's `USES` clause.
-- **Sound / music**: DIGPAK and MIDPAK are real-mode TSRs hooked via INT 66h, fundamentally incompatible with DOS/4GW protected-mode reflection. `chap09/blazer.c` wraps every audio call in `#ifndef DOS_32_BIT`, so the 32-bit Hover Blazer build runs silent.
+- **Sound / music**: DIGPAK and MIDPAK are real-mode TSRs hooked via INT 66h. Calling them from 32-bit DOS/4GW requires a DPMI bridge — `engine/dpmi.c` provides the wrappers (`dpmiRealModeInt` for INT 31h func 0300h to simulate the real-mode interrupt, `dpmiAllocDos` for INT 31h func 0100h to allocate DOS conventional memory shared between real and protected mode, `dpmiGetVector` for func 0200h to read the real-mode IVT). The 32-bit branch of `engine/black6.c` allocates VOC / XMIDI / SndStruc storage in DOS memory, builds real-mode `seg:off` FAR pointers inside the SndStruc by hand, and dispatches each INT 66h call through DPMI. Two 32-bit-specific subtleties:
+  - **`SndStruc` is `#pragma pack(1)`'d** in `engine/black6.h` — DIGPAK is real-mode code expecting the 12-byte unpacked layout. Watcom 32-bit's default `-zp8` would otherwise insert 2 bytes of padding before `isPlaying` and shift `frequency` to offset 12, causing playback at the wrong sample rate. A `SndStrucPackedCheck` typedef makes the build fail if anyone removes the pragma.
+  - **TSR detection probes the signature**, not just the vector. `audioPresent()` reads the INT 66h vector via DPMI 0200h, walks **6 bytes back** from the handler entry, and verifies the ASCII `"KERN"` (DIGPAK) or `"MIDI"` (MIDPAK) signature — matching what DIGPAK's own `CheckIn` does in [Ratcliff's DIGPLAY.ASM](https://github.com/jratcliff63367/digpak/blob/master/DIGPLAY.ASM). A non-DIGPAK TSR hooking INT 66h won't fool it.
 - **The `DOS_32_BIT` macro** is defined by the 32-bit Watcom project files and gates the per-platform variant code.
 
 ### What stays the same
@@ -225,7 +228,7 @@ The TSRs hook INT 66h; the engine calls them via inline assembly stubs in `engin
 
 MIDPAK plays **XMIDI (`.XMI`)** files only — it does not play standard `.MID` files. The original book CD shipped 17 `.XMI` files for the chap06 sound/music chapter; in this repo they live in [MSC/CHAP_6/DRIVERS/](MSC/CHAP_6/DRIVERS/) (TITLE.XMI, MARIO.XMI, FUNK.XMI, etc.). To exercise `chap06/mididemo.c`, copy one or more of those into `chap06/` and enter the filename when the menu prompts. The Hover Blazer soundtrack (`chap06/BLAZEMUS.XMI`, also used by `chap09/blazer.c`) is the only `.XMI` already present in `chap06/`.
 
-32-bit DOS/4GW builds run silent. INT 66h reflection from protected mode back to real-mode TSRs is not supported by DOS/4GW, so the audio call sites in `chap09/blazer.c` are wrapped in `#ifndef DOS_32_BIT` and skipped in the 32-bit build.
+32-bit DOS/4GW builds use the DPMI bridge in `engine/dpmi.c` to reach the real-mode TSRs. The same `SOUNDRV.COM` / `MIDPAK.COM` setup applies — load them before launching the 32-bit executable, identical to the 16-bit flow. The bridge transparently allocates DOS conventional memory for the VOC and XMIDI buffers via INT 31h func 0100h and dispatches each INT 66h call through INT 31h func 0300h.
 
 ## Credits and license
 

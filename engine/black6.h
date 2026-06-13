@@ -18,7 +18,13 @@
                                 // big to be buffered, hence, the caller
                                 // needs to keep the midi data resident in memory
 
-// the DIGPAK sound structure
+// the DIGPAK sound structure — DIGPAK is a real-mode TSR and reads this with
+// an unpacked 12-byte layout (4-byte pointer, 2-byte length, 4-byte pointer,
+// 2-byte frequency). Default 32-bit Watcom alignment would insert 2 bytes of
+// padding between sndLen and isPlaying, shifting frequency to offset 12 and
+// making DIGPAK read garbage as the playback rate — pack to 1 to lock the
+// layout for both builds.
+#pragma pack(push, 1)
 typedef struct SndStrucType {
     unsigned char FAR* sound;   // a pointer to the raw sound data
     unsigned short sndLen;      // the length of the sound data in bytes
@@ -27,12 +33,19 @@ typedef struct SndStrucType {
     short frequency;            // the frequency in hertz that the
                                 // sound should be played at
 } SndStruc, *SndStrucPtr;
+#pragma pack(pop)
 
 // our high level sound structure
 typedef struct SoundType {
     unsigned char FAR* buffer;  // pointer to the start of VOC file
     short status;               // the current status of the sound
     SndStruc ss;                // the DIGPAK sound structure
+#ifdef DOS_32_BIT
+    unsigned short dosSegment;  // real-mode segment of the DOS block holding
+                                // [VOC data | SndStruc | status word]
+    unsigned short dosSelector; // PM selector for the same block (used by dpmiFreeDos)
+    unsigned short ssOffset;    // offset of the SndStruc inside the DOS block
+#endif
 } Sound, *SoundPtr;
 
 // this holds a midi file
@@ -41,6 +54,10 @@ typedef struct MusicType {
     long size;                  // size of midi file in bytes
     int status;                 // status of long
     int registerInfo;           // return values of RegisterXmidiFile
+#ifdef DOS_32_BIT
+    unsigned short dosSegment;  // real-mode segment of XMIDI data in DOS memory
+    unsigned short dosSelector; // PM selector for the same block
+#endif
 } Music, *MusicPtr;
 
 int soundLoad(char* filename, SoundPtr sound, int translate);

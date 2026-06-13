@@ -4,10 +4,10 @@ projectIdent
 VpeMain
 1
 WRect
-1475
-479
-6538
-8944
+1781
+67
+6418
+8752
 2
 MProject
 3
@@ -30,8 +30,8 @@ VComponent
 WRect
 0
 0
-5656
-4251
+5650
+4241
 0
 0
 9
@@ -39,5 +39,5 @@ WFileName
 10
 vox_32.tgt
 0
-5
+0
 7
