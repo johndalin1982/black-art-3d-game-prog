@@ -26,10 +26,6 @@ LaMothe's *Black Art of 3D Game Programming* (1995, Waite Group Press) was the c
 
 This repository is a faithful port of all of that material to **Open Watcom 2.0 beta** (community fork) with a consistent modern C99 coding style, building as Watcom IDE projects (`.wpj` / `.tgt`). Both real-mode 16-bit (Watcom IDE system identifier `de6en`) and DOS/4GW 32-bit (`dr2en`) variants exist for the larger demos.
 
-The book and its CD is digitally available on the archive.org website:
-- https://archive.org/details/BlackArt3DEBook
-- https://archive.org/details/BlackArtOf3DGameProgramming
-
 ## Build requirements
 
 - **Open Watcom 2.0 beta** — the community fork from [github.com/open-watcom/open-watcom-v2](https://github.com/open-watcom/open-watcom-v2). The official 1.9 release does not have sufficient C99 support.
@@ -60,7 +56,7 @@ blackart3d/
 │   └── *_32.asm                         # 32-bit flat-mode assembly inner loops
 ├── chap02/ – chap18/                    # 16-bit demos for each chapter
 ├── ch09_32, ch14_32, ch15_32,           # 32-bit DOS/4GW project variants
-│   ch16_32, ch17_32/
+│   ch16_32, ch17_32, ch18_32/
 ├── audio/                               # DIGPAK / MIDPAK driver TSRs and patch files
 └── exp_font/                            # utility — dumps the BIOS 8x8 ROM font to font.bin
                                          # (needed by 32-bit builds since flat mode can't reach 0xF000:FA6E)
@@ -118,6 +114,7 @@ The larger demos (and chapters that benefit from flat-mode memory) have parallel
 | `ch15_32/` | `bsp_32`, `sort_32`, `solz_32`, `zdemo_32` | `../chap15/*.c` | |
 | `ch16_32/` | `vox_32`, `voxt_32`, `voxo_32` | `../chap16/{voxel,voxtile,voxopt}.c` | |
 | `ch17_32/` | `blz3d_32` | `../chap17/blaze3d.c` | Includes `_32.asm` rasterizer files |
+| `ch18_32/` | `krk_32` | `../chap18/krk.c` | Kill or Be Killed — same `_32.asm` rasterizer set as `ch17_32` |
 
 ## Coding style
 
@@ -181,11 +178,12 @@ The port surfaced a number of latent bugs in the original 1995 source. Most were
 Open the `.wpj` for the demo you want in Open Watcom IDE and choose Build → Make Target.
 
 ```
+chap16/voxel.wpj            # 16-bit voxel terrain (Comanche-style)
+ch16_32/voxo_32.wpj         # 32-bit optimized voxel
 chap17/blaze3d.wpj          # 16-bit Starblazer 3-D
 ch17_32/blz3d_32.wpj        # 32-bit Starblazer 3-D
 chap18/krk.wpj              # 16-bit Kill or Be Killed
-chap16/voxel.wpj            # 16-bit voxel terrain (Comanche-style)
-ch16_32/voxo_32.wpj         # 32-bit optimized voxel
+ch18_32/krk_32.wpj          # 32-bit Kill or Be Killed
 ...
 ```
 
@@ -236,3 +234,7 @@ MIDPAK plays **XMIDI (`.XMI`)** files only — it does not play standard `.MID` 
 - **Conversion to modern coding style + bug fixes**: this repository's contributor
 
 The original 1995 source was bundled with the book and CD. This port restructures it for modern toolchains; the underlying algorithms and architecture remain LaMothe's. If you want to learn how 3D rendering worked before GPUs, read the book; it's still in print as a used book and the techniques are foundational.
+
+The book and its CD is digitally available on the archive.org website:
+- https://archive.org/details/BlackArt3DEBook
+- https://archive.org/details/BlackArtOf3DGameProgramming
