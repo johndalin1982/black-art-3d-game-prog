@@ -1,6 +1,6 @@
 # Black Art of 3D Game Programming — modernized port
 
-A hand-converted port of every demo and engine module from André LaMothe's 1995 book *Black Art of 3D Game Programming*, built with **Open Watcom 2.0 beta** and targeting both **16-bit real-mode DOS** and **32-bit DOS/4GW protected mode**. Every chapter demo from the original CD has been reformatted into a consistent modern coding style, and the engine has been audited and patched for latent bugs that the original code carried.
+A hand-converted port of every demo and engine module from André LaMothe's 1995 book *Black Art of 3D Game Programming*, built with **Open Watcom 2.0 beta** and targeting both **16-bit real-mode DOS** and **32-bit DOS/4GW protected mode**. Every chapter demo from the original CD has been reformatted into a consistent modern coding style, and the engine has been audited and patched for latent bugs that the original code carried. It also goes beyond a straight port in places — most substantially an original **LAN-multiplayer layer over IPX** ([engine/ipx.c](engine/ipx.c)) that gives Starblazer head-to-head play the 1995 code never shipped (see [Networking](#networking-lan-play)).
 
 ## Table of contents
 
@@ -26,6 +26,8 @@ LaMothe's *Black Art of 3D Game Programming* (1995, Waite Group Press) was the c
 - **Kill or Be Killed** (chapter 18) — mech-vs-aliens 3D action game with HUD, inventory, modem multiplayer
 
 This repository is a faithful port of all of that material to **Open Watcom 2.0 beta** (community fork) with a consistent modern C99 coding style, building as Watcom IDE projects (`.wpj` / `.tgt`). Both real-mode 16-bit (Watcom IDE system identifier `de6en`) and DOS/4GW 32-bit (`dr2en`) variants exist for the larger demos.
+
+On top of that port, it adds original work the book didn't have — chiefly an **IPX LAN-multiplayer layer for Starblazer** (16- and 32-bit, with cross-play; see [Networking](#networking-lan-play)) — and patches a number of latent bugs in the original source, including some that only surface in two-player (see [Notable fixes](#notable-fixes-vs-the-book-code)).
 
 ## Build requirements
 
@@ -167,6 +169,13 @@ Three related bugs in the remote-ship code path ([chap09/blazer.c](chap09/blazer
 - **Thrust-frame draw corrupted the heading** — drawing the remote ship with engines on did `currFrame += 16` (to pick the thrust sprite) but then drew the sprite twice and subtracted 16 *twice* — an extra `-= 16` with no matching `+= 16` — leaving `RemotesShip.currFrame` at F−16. That negative index into `MotionDx[]`/`MotionDy[]` sent the remote's thrust off in a garbage direction. Fixed to the player's balanced `+= 16` / draw / `-= 16`.
 - **Engine register collided with the shield register** — `REMOTES_ENGINE_REG` was defined as `241`, the same palette register as `REMOTES_SHIELD_REG`. Once the remote could thrust, its engine-flicker wrote the (white) engine color into the shield palette entry and lit up a phantom white shield outline. Fixed to `243`, the distinct register the remote ship's art uses (240/241/242/243 = player-shield / remote-shield / player-engine / remote-engine).
 
+### Modem connect (Starblazer / term demos)
+
+Two robustness fixes in the modem driver ([engine/black9.c](engine/black9.c)), which the stock modem multiplayer (and the `term1`/`term2` demos) use:
+
+- **`CONNECT`-speed matching too narrow** — `modemResult` exact-matched the modem's response against a fixed list of result strings (`CONNECT`, `CONNECT 1200`, `CONNECT 2400`, `CONNECT 9600`, ...), so a modem that reported any *other* connect speed read as `MODEM_ERROR` and the game treated a successful call as a failure ("COMM PROBLEM"). This bit DOSBox-X's emulated modem, which always reports a hardcoded `CONNECT 57600`, and would equally bite a fast real modem. The line speed is informational only (the program drives the UART at its own DTE rate), so the fix accepts **any** `CONNECT…` line as `MODEM_CONNECT` via a prefix check — exactly how robust comm software handled it. On real hardware the book relied on the modem being configured (e.g. `ATX0` for a bare `CONNECT`) via its init string; DOSBox-X's softmodem doesn't implement those result-code commands, so the prefix check is the portable fix.
+- **`waitForConnection` fell off the end** — if the first response wasn't `RING`, the function reached its closing brace with no `return`, yielding an undefined result the caller would then act on. Added an explicit `return result;` so a timeout / stray response / user-abort is reported cleanly.
+
 ## 16-bit vs. 32-bit builds
 
 ### What changes between builds
@@ -279,10 +288,53 @@ The game's serial call sites are left verbatim and redirected at compile time (i
 
 Bring up IPX (above), then run `blzrx.exe` on both instances. From the setup menu one player picks **Wait for Connection** (host → Master) and the other picks **Make Connection** (joiner → Slave); the "phone number" prompt is ignored under IPX, so just press Enter. They auto-discover, exchange RNG seed + ship type, and drop into the game.
 
+### Modem play (the original serial link)
+
+The stock `chap09/blazer.c` build (no `NET_ENABLED` — e.g. `blazer.exe`) still uses the book's original **modem** link, and that works under DOSBox-X too. DOSBox-X emulates a Hayes-compatible "softmodem": `serial1=modem` gives the DOS guest a normal COM port that accepts AT commands, and a "phone call" (`ATDT…`) becomes a **TCP connection** between the two instances. One side listens (`listenport:`), the other dials; a `phonebookfile` maps the dialed digit-string to the listener's `host:port` (the game only accepts digits at the number prompt, so the phonebook is what lets you "dial" an address).
+
+> Requires the `black9.c` `CONNECT`-speed fix (see [Notable fixes](#notable-fixes-vs-the-book-code)) — DOSBox-X always answers `CONNECT 57600`, which the unpatched book code rejected.
+
+**Two instances on one machine** (`127.0.0.1`). Give each a DOSBox-X config:
+
+`answer.conf` — the listener:
+```ini
+[serial]
+serial1=modem listenport:5000
+phonebookfile=C:\path\to\chap09\phonebook.txt
+
+[autoexec]
+mount c "C:\path\to\chap09"
+c:
+```
+
+`dial.conf` — the caller (a second `listenport` just avoids a same-host bind clash):
+```ini
+[serial]
+serial1=modem listenport:5001
+phonebookfile=C:\path\to\chap09\phonebook.txt
+
+[autoexec]
+mount c "C:\path\to\chap09"
+c:
+```
+
+`phonebook.txt` — maps a fake number to the listener's address (`<number> <host:port>`, one per line):
+```
+5551234 127.0.0.1:5000
+```
+
+Then:
+1. Launch **answer.conf** first (`dosbox-x -conf answer.conf`). Run `BLAZER` → **Wait for Connection** — its modem is now listening and waiting for a ring.
+2. Launch **dial.conf** (`dosbox-x -conf dial.conf`). Run `BLAZER` → **Make Connection** → type `5551234` → Enter.
+3. The dialer's modem opens a TCP connection to `127.0.0.1:5000`; the listener rings, answers, both report `CONNECT`, and the linked game starts.
+
+Launch order matters — the listener must be up before the dialer calls, or the call gets `NO CARRIER`/COMM PROBLEM. Across two real machines, replace `127.0.0.1` in the phonebook with the listener's LAN IP. (For internet modem play DOSBox-X can also point at a relay, but LAN/loopback is the simple case.)
+
 ## Credits and license
 
 - **Original code**: André LaMothe / Waite Group Press, 1995 (Black Art of 3D Game Programming book/CD)
 - **Conversion to modern coding style + bug fixes**: this repository's contributor
+- **AI assistance (Claude Opus)**: the later/larger chapters and the original extensions were done with help from Anthropic's Claude Opus — Starblazer 3-D (chapter 17), the voxel demos (chapter 16), Kill or Be Killed (chapter 18), the 32-bit DOS/4GW conversions, and the IPX LAN-multiplayer layer.
 
 The original 1995 source was bundled with the book and CD. This port restructures it for modern toolchains; the underlying algorithms and architecture remain LaMothe's. If you want to learn how 3D rendering worked before GPUs, read the book; it's still in print as a used book and the techniques are foundational.
 

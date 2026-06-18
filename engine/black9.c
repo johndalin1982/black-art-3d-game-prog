@@ -341,6 +341,16 @@ int modemResult(char* output, int exitEnable) {
         strcpy(output, buffer);
     }
 
+    // Any "CONNECT..." line means we are online. Modems tack the negotiated line
+    // speed onto the result code, and it varies wildly across hardware/emulators
+    // (bare CONNECT, CONNECT 2400, CONNECT 9600, CONNECT 57600, CONNECT 115200,
+    // ...). DOSBox-X always reports "CONNECT 57600". The speed is informational
+    // only -- we drive the UART at our own DTE rate -- so collapse every CONNECT
+    // variant to MODEM_CONNECT instead of exact-matching a fixed list of speeds.
+    if (strncmp(buffer, "CONNECT", 7) == 0) {
+        return MODEM_CONNECT;
+    }
+
     // compute which response has been given
     for (index = 0; index < NUM_MODEM_RESPONSES; index++) {
         // test the response to next response string
@@ -472,4 +482,8 @@ int waitForConnection(void) {
             return result;
         }
     }
+
+    // never saw a RING (timeout, stray response, or user abort) -- report it
+    // rather than falling off the end with an undefined return value.
+    return result;
 }
