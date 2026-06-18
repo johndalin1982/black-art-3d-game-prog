@@ -286,49 +286,47 @@ The game's serial call sites are left verbatim and redirected at compile time (i
 
 ### Playing
 
-Bring up IPX (above), then run `blzrx.exe` on both instances. From the setup menu one player picks **Wait for Connection** (host → Master) and the other picks **Make Connection** (joiner → Slave); the "phone number" prompt is ignored under IPX, so just press Enter. They auto-discover, exchange RNG seed + ship type, and drop into the game.
+Bring up IPX (above) and run `blzrx.exe` / `blzrx32.exe` on both instances — or just use the ready-made configs below, which do it for you. From the setup menu one player picks **Wait for Connection** (host → Master) and the other picks **Make Connection** (joiner → Slave); the "phone number" prompt is ignored under IPX, so just press Enter. They auto-discover, exchange RNG seed + ship type, and drop into the game.
 
-### Modem play (the original serial link)
+### Ready-to-run DOSBox-X configs (`dosbox/`)
 
-The stock `chap09/blazer.c` build (no `NET_ENABLED` — e.g. `blazer.exe`) still uses the book's original **modem** link, and that works under DOSBox-X too. DOSBox-X emulates a Hayes-compatible "softmodem": `serial1=modem` gives the DOS guest a normal COM port that accepts AT commands, and a "phone call" (`ATDT…`) becomes a **TCP connection** between the two instances. One side listens (`listenport:`), the other dials; a `phonebookfile` maps the dialed digit-string to the listener's `host:port` (the game only accepts digits at the number prompt, so the phonebook is what lets you "dial" an address).
+The [dosbox/](dosbox/) folder has paired config files for every two-player demo. Each one launches a single instance: it sets up the link (IPX or modem), mounts the right build directory as `C:`, and **auto-runs the program** — so a two-player test on one PC is just two launches. The configs use **relative paths, so run them from the repository root** (DOSBox-X resolves `mount` against the shell's working directory — there's nothing machine-specific to edit). Start the **host / server / answer** side first:
 
-> Requires the `black9.c` `CONNECT`-speed fix (see [Notable fixes](#notable-fixes-vs-the-book-code)) — DOSBox-X always answers `CONNECT 57600`, which the unpatched book code rejected.
-
-**Two instances on one machine** (`127.0.0.1`). Give each a DOSBox-X config:
-
-`answer.conf` — the listener:
-```ini
-[serial]
-serial1=modem listenport:5000
-phonebookfile=C:\path\to\chap09\phonebook.txt
-
-[autoexec]
-mount c "C:\path\to\chap09"
-c:
+```
+dosbox-x -conf dosbox/blzrx-host.conf
+dosbox-x -conf dosbox/blzrx-join.conf
 ```
 
-`dial.conf` — the caller (a second `listenport` just avoids a same-host bind clash):
-```ini
-[serial]
-serial1=modem listenport:5001
-phonebookfile=C:\path\to\chap09\phonebook.txt
+(Run with the repo root as the working directory so the relative `mount` resolves. If `dosbox-x` isn't on your PATH, use its full path, e.g. `"C:\DOSBox-X\dosbox-x.exe" -conf dosbox\blzrx-host.conf`. On PowerShell, from the repo root: `Start-Process "C:\DOSBox-X\dosbox-x.exe" -ArgumentList '-conf','dosbox\blzrx-host.conf' -WorkingDirectory .` opens a window without blocking the shell.)
 
-[autoexec]
-mount c "C:\path\to\chap09"
-c:
-```
+| Demo | Link | Configs — launch ① then ② | In-game |
+|---|---|---|---|
+| **blzrx** (16-bit) | IPX | `blzrx-host.conf` · `blzrx-join.conf` | ① Wait for Connection  ② Make Connection (Enter at the number prompt) |
+| **blzrx32** (32-bit) | IPX | `blzrx32-host.conf` · `blzrx32-join.conf` | same as blzrx |
+| **blazer** (16-bit) | modem | `blazer-answer.conf` · `blazer-dial.conf` | ① Wait for Connection  ② Make Connection → dial `5551234` |
+| **blazer32** (32-bit) | modem † | `blazer32-answer.conf` · `blazer32-dial.conf` | same as blazer |
+| **term1** | null-modem | `term1-server.conf` · `term1-client.conf` | each window: COM `1`, then type to chat |
+| **term2** | modem | `term2-answer.conf` · `term2-dial.conf` | ① COM `1` → menu `2`  ② COM `1` → menu `1` → dial `5551234` |
 
-`phonebook.txt` — maps a fake number to the listener's address (`<number> <host:port>`, one per line):
-```
-5551234 127.0.0.1:5000
-```
+† 32-bit modem (`blazer32`) is **untested** — the verified 32-bit multiplayer path is `blzrx32` (IPX). Every other row is confirmed working.
 
-Then:
-1. Launch **answer.conf** first (`dosbox-x -conf answer.conf`). Run `BLAZER` → **Wait for Connection** — its modem is now listening and waiting for a ring.
-2. Launch **dial.conf** (`dosbox-x -conf dial.conf`). Run `BLAZER` → **Make Connection** → type `5551234` → Enter.
-3. The dialer's modem opens a TCP connection to `127.0.0.1:5000`; the listener rings, answers, both report `CONNECT`, and the linked game starts.
+Notes:
+- The configs use **paths relative to the repository root** (`mount c chap09`, etc.), so there's nothing machine-specific to edit — just launch them with the repo root as your working directory (see above). Works regardless of where the repo is checked out.
+- **Audio is on the first instance only.** The host/answer config mounts [audio/DRIVERS/](audio/DRIVERS/) as `D:`, loads `SOUNDRV.COM` + `MIDPAK.COM`, and runs the game with `s m` (sound + music); the join/dial config runs **silent** so you don't get two overlapping soundtracks on one machine. (The `term1`/`term2` configs have no audio.) 32-bit audio goes through the DPMI bridge and is less exercised than 16-bit.
+- Modem configs (and `term2`) share `dosbox/phonebook.txt`, which maps the dialed number `5551234` → `127.0.0.1:5000`. For two real machines, change that to the answerer's LAN IP. You can also dial `127.0.0.1:5000` directly in-game to skip the phonebook.
+- **Launch order matters** — the host/server/answer instance must be up first, or the other side gets `NO CARRIER` / can't pair.
 
-Launch order matters — the listener must be up before the dialer calls, or the call gets `NO CARRIER`/COMM PROBLEM. Across two real machines, replace `127.0.0.1` in the phonebook with the listener's LAN IP. (For internet modem play DOSBox-X can also point at a relay, but LAN/loopback is the simple case.)
+### How the links work
+
+The configs above wrap three different DOSBox-X transports; the conceptual picture, if you want to build your own or run across real machines:
+
+- **IPX** (`blzrx`, `blzrx32`) — DOSBox-X's built-in IPX-over-UDP. `ipx=true`, then `IPXNET STARTSERVER` (host) and `IPXNET CONNECT <ip>` (join) bring up a virtual IPX network the game discovers peers on — no packet driver, DHCP, or TCP/IP stack. `127.0.0.1` works for two instances on one machine. The configs run those `IPXNET` commands for you.
+
+- **Modem** (`blazer`, `blazer32`, `term2`) — DOSBox-X emulates a Hayes "softmodem": `serial1=modem` gives the guest a COM port that accepts AT commands, and a "phone call" (`ATDT…`) becomes a **TCP connection**. `listenport:` is the side that listens; `phonebookfile` maps the dialed digit-string to the listener's `host:port` (the game's number prompt only takes digits, so the phonebook is what lets you "dial" an address — or dial `host:port` directly). Relies on the `black9.c` `CONNECT`-speed fix (see [Notable fixes](#notable-fixes-vs-the-book-code)) — DOSBox-X always answers `CONNECT 57600`.
+
+- **Null-modem** (`term1`) — `serial1=nullmodem` is a raw serial cable over TCP, no modem/AT layer: one side `port:`-listens, the other `server:<ip> port:`-connects, and the link is live as soon as both are up (no dialing).
+
+For two real machines instead of one PC, point the joining/dialing side at the host's LAN IP (in `phonebook.txt` for modem, or the `server:` field for null-modem) and make sure the listener's TCP port is reachable.
 
 ## Credits and license
 
