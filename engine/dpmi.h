@@ -29,6 +29,12 @@ typedef struct DpmiRealModeRegsType {
 // Returns 0 on success, nonzero on DPMI host error.
 int dpmiRealModeInt(int intNumber, DpmiRealModeRegsPtr regs);
 
+// Call a real-mode FAR procedure from protected mode (DPMI INT 31h func 0301h).
+// regs->cs:ip must point to the real-mode procedure to call; the other register
+// fields are passed in and updated on return. DPMI supplies a real-mode stack
+// when regs->ss:sp are zero. Returns 0 on success, nonzero on DPMI host error.
+int dpmiCallRealFar(DpmiRealModeRegsPtr regs);
+
 // Allocate a block of DOS conventional memory (< 1 MB), accessible from both
 // real mode (via *segment) and protected mode (via *selector). The flat linear
 // address of the block equals (*segment << 4) under DOS/4GW.
@@ -48,5 +54,32 @@ int dpmiVectorInstalled(int intNumber);
 // On success: *segment and *offset receive the vector (CX:DX from DPMI 0200h),
 // returns 1. Returns 0 on DPMI host error.
 int dpmiGetVector(int intNumber, unsigned short* segment, unsigned short* offset);
+
+// Allocate a real-mode callback (DPMI INT 31h func 0303h).
+//
+// pmCallback : address of a protected-mode procedure that DPMI will invoke when
+//              real-mode code calls the returned (cbSegment:cbOffset) entry.
+//              The procedure receives ES:EDI = pointer to `rmRegs` (already
+//              populated with the real-mode register state at time of upcall);
+//              it must preserve all registers and return via IRETD. Typically
+//              authored as a Watcom #pragma aux asm trampoline that saves
+//              registers, sets DS to our data selector, calls a real C handler,
+//              restores registers, IRETs.
+// rmRegs     : storage for the real-mode register frame DPMI populates on each
+//              upcall. Must remain valid for the lifetime of the callback.
+// cbSegment, cbOffset : on success, receive the real-mode entry point that the
+//              TSR (packet driver, etc.) can call to reach our PM handler.
+//
+// Returns 1 on success, 0 on DPMI host error.
+int dpmiAllocRealCallback(
+    void (*pmCallback)(void),
+    DpmiRealModeRegsPtr rmRegs,
+    unsigned short* cbSegment,
+    unsigned short* cbOffset
+);
+
+// Free a real-mode callback previously returned by dpmiAllocRealCallback
+// (DPMI INT 31h func 0304h).
+void dpmiFreeRealCallback(unsigned short cbSegment, unsigned short cbOffset);
 
 #endif

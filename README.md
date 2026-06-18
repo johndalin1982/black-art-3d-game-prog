@@ -15,6 +15,7 @@ A hand-converted port of every demo and engine module from André LaMothe's 1995
 - [Building](#building)
 - [Running under DOSBox-X](#running-under-dosbox-x)
 - [Audio](#audio)
+- [Networking (LAN play)](#networking-lan-play)
 - [Credits and license](#credits-and-license)
 
 ## What this is
@@ -52,11 +53,15 @@ blackart3d/
 │   ├── black15.{c,h}                    # 3D engine — chap15 snapshot (BSP + Mode-Z)
 │   ├── black17.{c,h}                    # 3D engine — chap17 snapshot (mode 13h pipeline)
 │   ├── black18.{c,h}                    # 3D engine — chap18 snapshot (krk additions)
+│   ├── dpmi.{c,h}                       # 32-bit only: DPMI bridge to real-mode TSRs + DOS memory
+│   ├── ipx.{c,h}                        # LAN multiplayer over IPX (16- and 32-bit; DOSBox-X ipxnet / real IPX LAN)
 │   ├── *.asm                            # 16-bit assembly inner loops
 │   └── *_32.asm                         # 32-bit flat-mode assembly inner loops
 ├── chap02/ – chap18/                    # 16-bit demos for each chapter
 ├── ch09_32, ch14_32, ch15_32,           # 32-bit DOS/4GW project variants
 │   ch16_32, ch17_32, ch18_32/
+├── blzrx/                              # 16-bit Starblazer + LAN network play (shares chap09/blazer.c)
+├── blzrx32/                            # 32-bit Starblazer + LAN network play (shares chap09/blazer.c)
 ├── audio/                               # DIGPAK / MIDPAK driver TSRs and patch files
 └── exp_font/                            # utility — dumps the BIOS 8x8 ROM font to font.bin
                                          # (needed by 32-bit builds since flat mode can't reach 0xF000:FA6E)
@@ -72,7 +77,8 @@ The engine is split across multiple `black*` modules following the book's chapte
 | `black4` | Double buffering, bitmaps, PCX loading, sprites | `createDoubleBuffer`, `pcxLoad`, `spriteInit`, `spriteDraw` |
 | `black5` | Keyboard ISR (custom INT 9 handler), mouse via INT 33h, joystick port | `keyboardInstallDriver`, `KeyboardState[]`, `mouseControl`, `getScanCode` |
 | `black6` | DIGPAK (.VOC) sound and MIDPAK (.XMI) music via INT 66h TSRs | `soundLoad`, `soundPlay`, `musicLoad`, `musicPlay` — works in 16-bit and 32-bit (32-bit bridges through `engine/dpmi.c`) |
-| `dpmi`   | 32-bit only: DPMI INT 31h bridge to real-mode TSRs and DOS conventional memory | `dpmiRealModeInt`, `dpmiAllocDos`, `dpmiFreeDos`, `dpmiVectorInstalled` |
+| `dpmi`   | 32-bit only: DPMI INT 31h bridge to real-mode TSRs and DOS conventional memory | `dpmiRealModeInt`, `dpmiAllocDos`, `dpmiFreeDos`, `dpmiGetVector`, `dpmiAllocRealCallback`, `dpmiFreeRealCallback` |
+| `ipx`    | LAN multiplayer over IPX (DOOM-style) — broadcast peer discovery, datagram send/recv via polled ECBs. 16-bit real mode and 32-bit DOS/4GW (via the DPMI bridge); runs under DOSBox-X `ipxnet` or a real IPX LAN | `netInit`, `netPoll`, `netHost`, `netJoin`, `netRole`, `netSendToPeer`, `netRecv` |
 | `black8` | BIOS timer queries and PIT reprogramming | `timerQuery`, `timerProgram` |
 | `black9` | Serial port ISR and modem AT command driver | `serialOpen`, `modemDial`, `modemAnswer` |
 | `black11` | First full 3D engine: object loader (.PLG), matrix math, shading | `plgLoadObject`, `rotateObject`, `removeBackfacesAndShade`, `drawPolyList` |
@@ -115,6 +121,7 @@ The larger demos (and chapters that benefit from flat-mode memory) have parallel
 | `ch16_32/` | `vox_32`, `voxt_32`, `voxo_32` | `../chap16/{voxel,voxtile,voxopt}.c` | |
 | `ch17_32/` | `blz3d_32` | `../chap17/blaze3d.c` | Includes `_32.asm` rasterizer files |
 | `ch18_32/` | `krk_32` | `../chap18/krk.c` | Kill or Be Killed — same `_32.asm` rasterizer set as `ch17_32` |
+| `blzrx32/` | `blzrx32` | `../chap09/blazer.c` | Starblazer with **LAN network play** (IPX via the DPMI bridge) — adds `engine/ipx.c`, defines `NET_ENABLED`. See [Networking](#networking-lan-play). |
 
 ## Coding style
 
@@ -152,6 +159,14 @@ The port surfaced a number of latent bugs in the original 1995 source. Most were
 - **`voxopt.c` stale ray-length table** ([chap16/voxopt.c](chap16/voxopt.c)) — the book's optimization precomputed a per-row ray-length table once at startup, then the U/D/F/C keys updated `PlayZ`/`PlayDist` but the table was never refreshed. Pressing the keys had no visual effect. Added a per-frame `rebuildRayLengths()` call so the keys actually do something.
 - **`light.c` WEST wrap typo** ([chap02/light.c](chap02/light.c), [chap03/light.c](chap03/light.c)) — book bug inherited from `MSC/CHAP_2/LIGHT.C`: in the WEST case of the direction switch, `if (--playerX < 0) playerY = 319;` set the *Y* coordinate to 319 (off-screen) instead of wrapping *X* to 319. Turning left from the start sent the light cycle off the visible area and made the demo look frozen. Fixed to `playerX = 319;`.
 
+### Starblazer two-player (remote ship)
+
+Three related bugs in the remote-ship code path ([chap09/blazer.c](chap09/blazer.c)). All were dormant in the original: a fourth bug (the energy one below) kept the remote ship from ever thrusting, which masked the other two. They only surface once two machines are linked and the remote ship can actually move — so they affect both the modem and the IPX builds. The remote-ship logic is meant to mirror the player-ship logic exactly (input-lockstep re-simulates both ships on both machines), so each fix restores that symmetry.
+
+- **Remote energy zeroed every frame** — the remote's per-frame energy upkeep read `if (RemotesCloak == 1) RemotesEnergy--; else RemotesEnergy = 0;`, so any frame the remote wasn't cloaked its energy was forced to 0. Thrust, fire, and cloak are all gated on `RemotesEnergy > 0`, so the remote ship could never accelerate — it just coasted and slid out of sync with the peer actually flying it. Fixed to mirror the player's upkeep (decrement, floor at 0).
+- **Thrust-frame draw corrupted the heading** — drawing the remote ship with engines on did `currFrame += 16` (to pick the thrust sprite) but then drew the sprite twice and subtracted 16 *twice* — an extra `-= 16` with no matching `+= 16` — leaving `RemotesShip.currFrame` at F−16. That negative index into `MotionDx[]`/`MotionDy[]` sent the remote's thrust off in a garbage direction. Fixed to the player's balanced `+= 16` / draw / `-= 16`.
+- **Engine register collided with the shield register** — `REMOTES_ENGINE_REG` was defined as `241`, the same palette register as `REMOTES_SHIELD_REG`. Once the remote could thrust, its engine-flicker wrote the (white) engine color into the shield palette entry and lit up a phantom white shield outline. Fixed to `243`, the distinct register the remote ship's art uses (240/241/242/243 = player-shield / remote-shield / player-engine / remote-engine).
+
 ## 16-bit vs. 32-bit builds
 
 ### What changes between builds
@@ -184,6 +199,8 @@ chap17/blaze3d.wpj          # 16-bit Starblazer 3-D
 ch17_32/blz3d_32.wpj        # 32-bit Starblazer 3-D
 chap18/krk.wpj              # 16-bit Kill or Be Killed
 ch18_32/krk_32.wpj          # 32-bit Kill or Be Killed
+blzrx/blzrx.wpj           # 16-bit Starblazer with LAN network play
+blzrx32/blzrx32.wpj       # 32-bit Starblazer with LAN network play
 ...
 ```
 
@@ -227,6 +244,40 @@ The TSRs hook INT 66h; the engine calls them via inline assembly stubs in `engin
 MIDPAK plays **XMIDI (`.XMI`)** files only — it does not play standard `.MID` files. The original book CD shipped 17 `.XMI` files for the chap06 sound/music chapter; in this repo they live in [MSC/CHAP_6/DRIVERS/](MSC/CHAP_6/DRIVERS/) (TITLE.XMI, MARIO.XMI, FUNK.XMI, etc.). To exercise `chap06/mididemo.c`, copy one or more of those into `chap06/` and enter the filename when the menu prompts. The Hover Blazer soundtrack (`chap06/BLAZEMUS.XMI`, also used by `chap09/blazer.c`) is the only `.XMI` already present in `chap06/`.
 
 32-bit DOS/4GW builds use the DPMI bridge in `engine/dpmi.c` to reach the real-mode TSRs. The same `SOUNDRV.COM` / `MIDPAK.COM` setup applies — load them before launching the 32-bit executable, identical to the 16-bit flow. The bridge transparently allocates DOS conventional memory for the VOC and XMIDI buffers via INT 31h func 0100h and dispatches each INT 66h call through INT 31h func 0300h.
+
+## Networking (LAN play)
+
+Starblazer (`chap09/blazer.c`) gets **head-to-head play over a LAN** using **IPX** — the protocol real DOS multiplayer games (DOOM, Duke3D, Warcraft, Descent) actually used. This replaces the book's null-modem / dial-up serial link. The networking layer is gated behind the `NET_ENABLED` macro (defined only by the net project files), so the stock `chap09/blazer.wpj` build doesn't pull in the IPX code.
+
+Two playable builds share `chap09/blazer.c`: **`blzrx/`** (16-bit real mode — `blzrx.exe`, no `dos4gw.exe` needed) and **`blzrx32/`** (32-bit DOS/4GW — `blzrx32.exe`). Both speak IPX and interoperate — 16-bit↔32-bit cross-play works. They differ only in how they reach the real-mode IPX entry: the 16-bit build far-calls it directly; the 32-bit build bridges through DPMI (INT 31h `0300h` to fetch the entry, `0301h` to far-call it) with ECBs/buffers in DOS conventional memory. Both define `NET_ENABLED`; only `blzrx32` adds `DOS_32_BIT`.
+
+### Requirements
+
+**No packet driver, no TCP/IP stack, no DHCP** — IPX is self-contained. Under DOSBox-X just enable it:
+
+```ini
+[ipx]
+ipx=true
+```
+
+Then bring up the IPX-over-UDP tunnel from the DOS prompt: `IPXNET STARTSERVER` on one instance and `IPXNET CONNECT <ip>` on the other — `127.0.0.1` works for **two instances on the same machine** (which the old NE2000/UDP path could never do). On real hardware, any working IPX setup (e.g. the AMD PCnet ODI stack, or `PCNTPK.COM` + `PDIPX.COM`) provides the same API. For internet play, relay with [ipxbox](https://github.com/fragglet/ipxbox).
+
+### How it works
+
+`engine/ipx.c` is a small IPX layer (16-bit real mode and 32-bit DOS/4GW), translated from id's DOOM `ipx/IPXNET.C` into Open Watcom:
+
+- **Driver access** — the IPX entry point is obtained via `INT 2Fh`/`AX=7A00h` and invoked through `#pragma aux` wrappers that issue `call dword ptr [IPXEntry]` (a real-mode far-indirect call), the Watcom equivalent of DOOM's Borland thunk. Byte-exact 42-byte ECB and 30-byte IPX-header structs (verified against the DOOM/C&C definitions). In 32-bit builds the same real-mode entry is reached through the DPMI bridge instead (`0300h` to fetch it, `0301h` to far-call it), with ECBs/buffers in DOS conventional memory polled via the flat selector — so no DPMI `0303h` callback is ever needed.
+- **Polled receive** — listen ECBs are posted with `ESRAddress = 0` (no async upcall); `netPoll()` scans each ECB's `InUseFlag`, copies completed packets into a queue, and re-arms. No real-mode callback, so none of the interrupt-time/stack fragility of a DPMI receive callback.
+- **App protocol** — each IPX payload is tagged `[B1]` (discovery beacon) or `[B2][len][bytes]` (game datagram); the explicit length keeps the byte stream exact regardless of frame padding. Game data is only accepted from the paired peer's node; the driver loops our own broadcasts back, so we ignore packets from our own node.
+- **Discovery** — host (`netHost`) and joiner (`netJoin`) each broadcast a role beacon a couple of times a second until they hear the complementary role, then pair: **host = Master, joiner = Slave**. `GAME_LINKING` applies the result via `netRole()`.
+
+### Transport shim
+
+The game's serial call sites are left verbatim and redirected at compile time (in `chap09/blazer.c`, under `#ifdef NET_ENABLED`): `serialWrite` / `serialReadWait` / `makeConnection` / `serialFlush` / etc. become an IPX byte-FIFO. Starblazer's lockstep protocol (write a byte, then a blocking read, every frame) maps to **flush-on-read** — each read ships pending writes as one datagram, then pumps `netPoll()` until the peer's datagram arrives. A tiny stop-and-wait sequence/ack layer rides on top so a lost datagram self-heals instead of desyncing the lockstep, with a timeout so a vanished peer degrades instead of hanging.
+
+### Playing
+
+Bring up IPX (above), then run `blzrx.exe` on both instances. From the setup menu one player picks **Wait for Connection** (host → Master) and the other picks **Make Connection** (joiner → Slave); the "phone number" prompt is ignored under IPX, so just press Enter. They auto-discover, exchange RNG seed + ship type, and drop into the game.
 
 ## Credits and license
 

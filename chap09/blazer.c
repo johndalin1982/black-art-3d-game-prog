@@ -18,6 +18,10 @@
 #include "black8.h"
 #include "black9.h"
 
+#ifdef NET_ENABLED
+#include "ipx.h"          // LAN multiplayer over IPX (DOSBox-X ipxnet / real IPX LAN)
+#endif
+
 // digital sound system
 #define BLZCLK_VOC      0   // engaging the cloaking device
 #define BLZEXP1_VOC     1   // standard explosion
@@ -238,7 +242,12 @@
 
 // engine defines
 #define PLAYERS_ENGINE_REG          242 // color registers for engine flicker
-#define REMOTES_ENGINE_REG          241 // color and remotes shield color
+// BUG FIX: the book defined this as 241 — the SAME register as REMOTES_SHIELD_REG
+// — so once the remote ship could thrust, its engine flicker wrote the (white)
+// engine color into the shield register and lit up a phantom white shield outline.
+// 243 is the distinct register the remote ship's art uses (240/241/242/243 =
+// P-shield / R-shield / P-engine / R-engine).
+#define REMOTES_ENGINE_REG          243
 
 // introduction panel colors
 #define END_PANEL_REG               41  // the color register range for the
@@ -3766,6 +3775,245 @@ int getModemString(char* buffer) {
     return 1;
 }
 
+#ifdef NET_ENABLED
+// ---------------------------------------------------------------------------
+// Serial-link compatibility shim (NET_ENABLED builds only)
+//
+// StarBlazer's modem code (engine/black9) is a reliable, ordered byte stream.
+// Under NET_ENABLED we leave every serial call site in the game verbatim — so
+// the non-net build stays byte-for-byte identical — and redirect those calls,
+// at compile time, onto the IPX transport in engine/ipx. The game's lockstep
+// protocol (write a byte, then a blocking read, every frame) maps to a
+// "flush-on-read" scheme: each read first ships our pending writes as one
+// datagram, then blocks (pumping netPoll) until the peer's datagram arrives.
+//
+// Roles: broadcast discovery decides Master/Slave (host = MASTER, joiner =
+// SLAVE); GAME_LINKING below applies the result via netRole().
+// ---------------------------------------------------------------------------
+
+#define BLAZER_NET_PORT   7777      // IPX socket for StarBlazer LAN play
+#define LINK_TX_MAX       64
+#define LINK_RX_MAX       256
+#define LINK_HDR          8         // datagram header: 32-bit seq + 32-bit ack
+
+static int           NetReady   = 0;   // netInit() succeeded this session
+static unsigned char LinkTx[LINK_TX_MAX];
+static int           LinkTxLen  = 0;
+static unsigned char LinkRx[LINK_RX_MAX];
+static int           LinkRxHead = 0;
+static int           LinkRxTail = 0;
+
+// Reliable, in-order delivery over IPX. StarBlazer was written for a modem — a
+// lossless, ordered byte stream — and keeps the two ships in sync by exchanging
+// only key-presses each frame and simulating both ships from them. A single
+// lost/duplicated/reordered datagram would desync that lockstep forever, so we
+// layer a tiny stop-and-wait protocol on top of the datagrams: each carries a
+// 32-bit sequence and a 32-bit ack (count of in-order datagrams received from
+// the peer). The receiver accepts only the next expected sequence; the sender
+// retransmits until the peer's ack confirms delivery and will not advance to the
+// next datagram until the current one is acknowledged. A dropped packet then
+// self-heals instead of diverging the simulation.
+static unsigned long TxSeq      = 0;   // sequence of the next datagram we send
+static unsigned long RxExpect   = 0;   // next datagram sequence expected from peer
+static unsigned long LastTxSeq  = 0;   // sequence of LastTx
+static unsigned char LastTx[LINK_HDR + LINK_TX_MAX];   // last datagram (for resend)
+static int           LastTxLen  = 0;
+static int           TxAcked    = 1;   // has the peer acknowledged LastTx?
+
+static void putU32(unsigned char* p, unsigned long v) {
+    p[0] = (unsigned char)(v);        p[1] = (unsigned char)(v >> 8);
+    p[2] = (unsigned char)(v >> 16);  p[3] = (unsigned char)(v >> 24);
+}
+static unsigned long getU32(const unsigned char* p) {
+    return (unsigned long)p[0]        | ((unsigned long)p[1] << 8) |
+           ((unsigned long)p[2] << 16) | ((unsigned long)p[3] << 24);
+}
+
+static void linkRxPush(const unsigned char* p, int n) {
+    int i;
+    for (i = 0; i < n; i++) {
+        int nxt = (LinkRxHead + 1) % LINK_RX_MAX;
+        if (nxt == LinkRxTail) {
+            break;                     // ring full, drop the rest
+        }
+        LinkRx[LinkRxHead] = p[i];
+        LinkRxHead = nxt;
+    }
+}
+
+static int linkRxPop(void) {
+    int b;
+    if (LinkRxTail == LinkRxHead) {
+        return -1;
+    }
+    b = LinkRx[LinkRxTail];
+    LinkRxTail = (LinkRxTail + 1) % LINK_RX_MAX;
+    return b;
+}
+
+// (Re)send our current datagram, stamping the latest ack (= datagrams received).
+static void linkSendCur(void) {
+    if (LastTxLen <= 0) {
+        return;
+    }
+    putU32(LastTx + 4, RxExpect);
+    netSendToPeer(LastTx, (unsigned int)LastTxLen);
+}
+
+// Drain inbound datagrams: track the peer's ack, accept in-order payload only.
+static void linkPumpRx(void) {
+    unsigned char tmp[NET_MAX_PACKET_BYTES];
+    int n;
+    netPoll();
+    while ((n = netRecv(tmp, sizeof(tmp), 0)) > 0) {
+        unsigned long seq, ack;
+        if (n < LINK_HDR) {
+            continue;                  // malformed (no header)
+        }
+        seq = getU32(tmp);
+        ack = getU32(tmp + 4);
+        if (LastTxLen > 0 && ack > LastTxSeq) {
+            TxAcked = 1;               // peer has received our LastTx
+        }
+        if (seq == RxExpect) {
+            linkRxPush(tmp + LINK_HDR, n - LINK_HDR);
+            RxExpect++;
+        }
+        // else: duplicate / old / out-of-order -> ignore
+    }
+}
+
+static void netLinkWrite(int ch) {
+    if (LinkTxLen < LINK_TX_MAX) {
+        LinkTx[LinkTxLen++] = (unsigned char)ch;
+    }
+}
+
+// Block (resending) until the peer acknowledges our last datagram, so we never
+// advance the sequence with an undelivered packet still outstanding.
+static void linkWaitAck(void) {
+    unsigned long start = timerQuery();
+    unsigned long lastSend = start;
+    while (!TxAcked && (timerQuery() - start) < 18UL * 5UL) {
+        linkPumpRx();
+        if (TxAcked) {
+            return;
+        }
+        if ((timerQuery() - lastSend) >= 2) {
+            linkSendCur();
+            lastSend = timerQuery();
+        }
+    }
+}
+
+// Blocking, reliable read of one link byte (the modem-equivalent serialReadWait):
+// flush our pending write as a sequenced datagram, then pump the network until
+// the next in-order byte arrives, retransmitting so loss self-heals. Times out
+// (returns 0) after ~5 s so a vanished peer degrades rather than hanging.
+static int netLinkReadWait(void) {
+    unsigned long start, lastSend;
+    int           b;
+
+    if (LinkTxLen > 0) {
+        linkWaitAck();                 // ensure the previous datagram landed first
+        LastTxSeq = TxSeq;
+        putU32(LastTx, TxSeq);
+        memcpy(LastTx + LINK_HDR, LinkTx, (unsigned int)LinkTxLen);
+        LastTxLen = LINK_HDR + LinkTxLen;
+        LinkTxLen = 0;
+        TxSeq++;
+        TxAcked = 0;
+        linkSendCur();
+    }
+
+    b = linkRxPop();
+    if (b >= 0) {
+        return b;
+    }
+
+    start = lastSend = timerQuery();
+    while ((timerQuery() - start) < 18UL * 5UL) {   // 18.2 ticks/s
+        linkPumpRx();
+        b = linkRxPop();
+        if (b >= 0) {
+            return b;
+        }
+        if ((timerQuery() - lastSend) >= 2) {       // ~9 retransmits/s
+            linkSendCur();
+            lastSend = timerQuery();
+        }
+    }
+    return 0;
+}
+
+// Maps to serialFlush(): reset the link, including the sequence state. Called at
+// connect time, so both ends start their sequence space at 0 and stay aligned.
+static void netLinkFlush(void) {
+    LinkRxHead = LinkRxTail = 0;
+    LinkTxLen  = 0;
+    TxSeq      = 0;
+    RxExpect   = 0;
+    LastTxSeq  = 0;
+    LastTxLen  = 0;
+    TxAcked    = 1;
+}
+
+// Zero-config IPX pairing by broadcast discovery. MAKE CONNECTION -> joiner
+// (the "phone number" the menu prompts for is ignored); WAIT FOR CONNECTION ->
+// host. Both return MODEM_CONNECT on success so the menu advances to
+// GAME_LINKING, or 0 (-> "COMM PROBLEM") on failure/timeout. Roles: host =
+// MASTER, joiner = SLAVE (GAME_LINKING reads netRole()).
+
+// Maps to makeConnection(number): join a hosted game. Over IPX this is zero-
+// config broadcast discovery, so the entered "number" is ignored — just beacon
+// as a joiner and pair with whichever peer is hosting.
+static int netLinkClient(const char* number) {
+    unsigned long start;
+
+    if (!NetReady) {
+        return 0;
+    }
+    netLinkFlush();
+    (void)number;                       // ignored under IPX (discovery is broadcast)
+    netJoin();                          // broadcast as a joiner; pair with the host
+    start = timerQuery();
+    while (netDiscoveryStatus() != NET_DISC_PAIRED &&
+           (timerQuery() - start) < 18UL * 30UL) {     // up to ~30 s
+        netPoll();
+    }
+    return (netDiscoveryStatus() == NET_DISC_PAIRED) ? MODEM_CONNECT : 0;
+}
+
+// Maps to waitForConnection(): host and wait for a client to connect.
+static int netLinkHost(void) {
+    unsigned long start;
+
+    if (!NetReady) {
+        return 0;
+    }
+    netLinkFlush();
+    netHost();
+    start = timerQuery();
+    while (netDiscoveryStatus() != NET_DISC_PAIRED &&
+           (timerQuery() - start) < 18UL * 90UL) {     // up to ~90 s (waiting on a human)
+        netPoll();
+    }
+    return (netDiscoveryStatus() == NET_DISC_PAIRED) ? MODEM_CONNECT : 0;
+}
+
+// Compile-time redirection of the serial/modem link onto the IPX transport.
+#define modemControl(x)       ((void)0)
+#define serialOpen(a,b,c)     ((void)0)
+#define initializeModem(s)    ((void)0)
+#define hangUp()              ((void)0)
+#define serialClose()         ((void)0)
+#define serialFlush()         netLinkFlush()
+#define makeConnection(n)     netLinkClient(n)
+#define waitForConnection()   netLinkHost()
+#define serialWrite(ch)       netLinkWrite(ch)
+#define serialReadWait()      netLinkReadWait()
+#endif // NET_ENABLED
+
 void main(int argc, char** argv) {
     // the main controls of the player and remote logic, normally we would
     // probably move most of the code into functions, but for instructional purposes
@@ -3802,6 +4050,19 @@ void main(int argc, char** argv) {
     // get the modem initialization string
     getModemString(modemIniString);
     printf("\nExtra modem initialization string = %s", modemIniString);
+
+#ifdef NET_ENABLED
+    // bring up the LAN transport before we leave text mode, so any diagnostics
+    // are visible
+    printf("\nStarBlazer LAN: initializing network...\n");
+    NetReady = netInit(BLAZER_NET_PORT);
+    if (NetReady) {
+        printf("IPX network ready (DOSBox: IPXNET STARTSERVER / CONNECT).\n");
+    } else {
+        printf("IPX unavailable - LAN play disabled (solo only).\n");
+    }
+    timeDelay(20);
+#endif
 
     timeDelay(25);
 
@@ -4287,6 +4548,13 @@ void main(int argc, char** argv) {
                 }
             }
         } else if (GameState == GAME_LINKING) {
+#ifdef NET_ENABLED
+            // discovery (not the menu) decides who is master: the peer with the
+            // higher random nonce wins, so both ends agree regardless of which
+            // menu item each player chose
+            Master = (netRole() == NET_ROLE_MASTER);
+            Slave  = (netRole() == NET_ROLE_SLAVE);
+#endif
             // wait a second to make sure other machine is linked
             timeDelay(DELAY_2_SECOND);
 
@@ -4864,8 +5132,18 @@ void main(int argc, char** argv) {
                             }
                         }
 
-                        // update energy loss due to normal operation
+                        // update energy loss due to normal operation.
+                        // BUG FIX: mirror the player's energy upkeep (~4939). The
+                        // book's original line here was `else RemotesEnergy = 0`,
+                        // which zeroed energy on every frame the remote wasn't
+                        // cloaked -> the remote ship could never thrust/fire (both
+                        // gated on RemotesEnergy > 0), so in two-player it coasted
+                        // and drifted out of sync with the peer actually flying it.
                         if (RemotesCloak == 1) {
+                            RemotesEnergy--;
+                        }
+
+                        if (RemotesEnergy > 0) {
                             RemotesEnergy--;
                         } else {
                             RemotesEnergy = 0;
@@ -5085,15 +5363,15 @@ void main(int argc, char** argv) {
                     // test if ship is totally cloaked
                     if (RemotesCloak == -1) {
                         // ship isn't cloaked
+                        // BUG FIX: mirror the player's thrust-frame draw (~5365).
+                        // The book's original drew the remote a second time and
+                        // subtracted 16 from currFrame an extra time (a second
+                        // `-= 16` with no matching `+= 16`), leaving currFrame at
+                        // F-16 — a garbage index into MotionDx[] that sent thrust in
+                        // random directions once the remote ship could move.
                         if (RemotesEngine) {
                             // index into frames with thrust
                             RemotesShip.currFrame += 16;
-
-                            // draw the ship with thrust showing
-                            spriteDrawClip(&RemotesShip, DoubleBuffer, 1);
-
-                            // restore the original frame
-                            RemotesShip.currFrame -= 16;
 
                             // draw the ship with thrust showing
                             spriteDrawClip(&RemotesShip, DoubleBuffer, 1);
@@ -5224,6 +5502,13 @@ void main(int argc, char** argv) {
 
     // close down music
     musicClose();
+
+#ifdef NET_ENABLED
+    // release the packet handle, DPMI callback and DOS buffers
+    if (NetReady) {
+        netShutdown();
+    }
+#endif
 
     setGraphicsMode(TEXT_MODE);
 
