@@ -82,7 +82,7 @@ The engine is split across multiple `black*` modules following the book's chapte
 | `dpmi`   | 32-bit only: DPMI INT 31h bridge to real-mode TSRs and DOS conventional memory | `dpmiRealModeInt`, `dpmiAllocDos`, `dpmiFreeDos`, `dpmiGetVector`, `dpmiAllocRealCallback`, `dpmiFreeRealCallback` |
 | `ipx`    | LAN multiplayer over IPX (DOOM-style) — broadcast peer discovery, datagram send/recv via polled ECBs. 16-bit real mode and 32-bit DOS/4GW (via the DPMI bridge); runs under DOSBox-X `ipxnet` or a real IPX LAN | `netInit`, `netPoll`, `netHost`, `netJoin`, `netRole`, `netSendToPeer`, `netRecv` |
 | `black8` | BIOS timer queries and PIT reprogramming | `timerQuery`, `timerProgram` |
-| `black9` | Serial port ISR and modem AT command driver | `serialOpen`, `modemDial`, `modemAnswer` |
+| `black9` | Serial port ISR and modem AT command driver | `serialOpen`, `modemControl`, `makeConnection`, `waitForConnection` |
 | `black11` | First full 3D engine: object loader (.PLG), matrix math, shading | `plgLoadObject`, `rotateObject`, `removeBackfacesAndShade`, `drawPolyList` |
 | `black15` | Adds BSP trees, Mode-Z renderer, Z-sorted painter's algorithm | `bspBuild`, `bspTraverse`, `drawPolyListZ` |
 | `black17` | Mode 13h pipeline with assembly inner loops, DOS/4GW additions | `fillDoubleBuffer32`, `displayDoubleBuffer32`, `triangleAsm` |
@@ -117,7 +117,7 @@ The larger demos (and chapters that benefit from flat-mode memory) have parallel
 
 | Directory | Project | Source | Notes |
 |---|---|---|---|
-| `ch09_32/` | `blazer32` | `../chap09/blazer.c` | Hover Blazer — audio stubbed under `#ifndef DOS_32_BIT` |
+| `ch09_32/` | `blazer32` | `../chap09/blazer.c` | Hover Blazer (32-bit DOS/4GW build) |
 | `ch14_32/` | `obj_32` | `../chap14/objects.c` | |
 | `ch15_32/` | `bsp_32`, `sort_32`, `solz_32`, `zdemo_32` | `../chap15/*.c` | |
 | `ch16_32/` | `vox_32`, `voxt_32`, `voxo_32` | `../chap16/{voxel,voxtile,voxopt}.c` | |
@@ -250,7 +250,7 @@ The TSRs hook INT 66h; the engine calls them via inline assembly stubs in `engin
 
 ### Music file format
 
-MIDPAK plays **XMIDI (`.XMI`)** files only — it does not play standard `.MID` files. The original book CD shipped 17 `.XMI` files for the chap06 sound/music chapter; in this repo they live in [MSC/CHAP_6/DRIVERS/](MSC/CHAP_6/DRIVERS/) (TITLE.XMI, MARIO.XMI, FUNK.XMI, etc.). To exercise `chap06/mididemo.c`, copy one or more of those into `chap06/` and enter the filename when the menu prompts. The Hover Blazer soundtrack (`chap06/BLAZEMUS.XMI`, also used by `chap09/blazer.c`) is the only `.XMI` already present in `chap06/`.
+MIDPAK plays **XMIDI (`.XMI`)** files only — it does not play standard `.MID` files. The original book CD shipped 17 `.XMI` files for the chap06 sound/music chapter in the CD's `MSC/CHAP_6/DRIVERS/` (the book's own folder, not part of this repo); the same set is bundled here under [audio/DRIVERS/](audio/DRIVERS/) (TITLE.XMI, MARIO.XMI, FUNK.XMI, etc.). To exercise `chap06/mididemo.c`, copy one or more of those into `chap06/` and enter the filename when the menu prompts. The Hover Blazer soundtrack (`chap06/BLAZEMUS.XMI`, also used by `chap09/blazer.c`) is the only `.XMI` already present in `chap06/`.
 
 32-bit DOS/4GW builds use the DPMI bridge in `engine/dpmi.c` to reach the real-mode TSRs. The same `SOUNDRV.COM` / `MIDPAK.COM` setup applies — load them before launching the 32-bit executable, identical to the 16-bit flow. The bridge transparently allocates DOS conventional memory for the VOC and XMIDI buffers via INT 31h func 0100h and dispatches each INT 66h call through INT 31h func 0300h.
 
