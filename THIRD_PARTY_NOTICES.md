@@ -30,7 +30,7 @@ the source from the companion CD of André LaMothe's *Black Art of 3D Game Progr
 
 ## 2. DIGPAK digital-sound drivers — John W. Ratcliff / The Audio Solution
 
-- **Files:** `audio/DRIVERS/SOUNDRV.COM` and the card-specific DIGPAK `.COM` drivers.
+- **Files:** the card-specific DIGPAK `.COM` drivers in `audio/DRIVERS` (e.g. `SBPRO.COM`, `SB16.COM`, `ADLIB.COM`). `SOUNDRV.COM` — the digital driver the games load — is **generated** from one of these per machine by the `SETD` setup tool (run `SETUP.BAT`), not shipped pre-built.
 - **License:** **MIT** — the author open-sourced DIGPAK in 2021 at
   <https://github.com/jratcliff63367/digpak>. © 1993 John W. Ratcliff.
 - The legacy "for maintenance purposes ONLY" text in `audio/DRIVERS/README.PRN` predates and

@@ -24,7 +24,7 @@ LaMothe's *Black Art of 3D Game Programming* (1995, Waite Group Press) was the c
 
 - **Starblazer** (chapter 9) — two-player top-down space-combat game, originally played head-to-head over a modem/serial link; this port extends it with **IPX LAN play** (see [Networking](#networking-lan-play))
 - **Starblazer 3-D** (chapter 17) — asteroids-style first-person 3D space shooter
-- **Kill or Be Killed** (chapter 18) — mech-vs-aliens 3D action game with HUD, inventory, modem multiplayer
+- **Kill or Be Killed** (chapter 18) — single-player mech-vs-aliens 3D action game with a HUD, radar scanner, and selectable battle mechs
 
 This repository is a faithful port of all of that material to **Open Watcom 2.0 beta** (community fork) with a consistent modern C99 coding style, building as Watcom IDE projects (`.wpj` / `.tgt`). Both real-mode 16-bit (Watcom IDE system identifier `de6en`) and DOS/4GW 32-bit (`dr2en`) variants exist for the larger demos.
 
@@ -85,7 +85,7 @@ The engine is split across multiple `black*` modules following the book's chapte
 | `black8` | BIOS timer queries and PIT reprogramming | `timerQuery`, `timerProgram` |
 | `black9` | Serial port ISR and modem AT command driver | `serialOpen`, `modemControl`, `makeConnection`, `waitForConnection` |
 | `black11` | First full 3D engine: object loader (.PLG), matrix math, shading | `plgLoadObject`, `rotateObject`, `removeBackfacesAndShade`, `drawPolyList` |
-| `black15` | Adds BSP trees, Mode-Z renderer, Z-sorted painter's algorithm | `bspBuild`, `bspTraverse`, `drawPolyListZ` |
+| `black15` | Adds BSP trees, Mode-Z renderer, Z-sorted painter's algorithm | `buildBspTree`, `bspTraverse`, `drawPolyListZ` |
 | `black17` | Mode 13h pipeline with assembly inner loops, DOS/4GW additions | `fillDoubleBuffer32`, `displayDoubleBuffer32`, `triangleAsm` |
 | `black18` | Chap17 engine + line clipper, wireframe, force-color shading | `clipLine`, `drawLine`, `drawObjectWire`, `removeBackfacesAndShade(obj, forceColor)` |
 
@@ -146,7 +146,6 @@ The port surfaced a number of latent bugs in the original 1995 source. Most were
 ### Critical (caused crashes or memory corruption)
 
 - **`loadPaletteDisk` buffer overflow** ([engine/black11.c](engine/black11.c), [engine/black17.c](engine/black17.c)) — `fscanf("%d %d %d", &color.red, &color.green, &color.blue)` where the targets are `unsigned char`. `%d` writes `sizeof(int)` bytes per argument — 2 bytes in 16-bit (already corrupting adjacent fields), 4 in 32-bit (9-byte stack overwrite per call × 256 iterations). The fix uses the C99 `%hhu` length modifier so each scan writes exactly one byte.
-- **`clipObject3D` near-plane test too lenient** ([engine/black17.c](engine/black17.c)) — used AND across all four vertex z's instead of OR. Polygons that *straddled* the near plane were left for the perspective divide, which then produced wild projected coordinates from near-zero z values and fed those into the rasterizer. Changed to OR so any vertex behind the near plane clips the whole polygon.
 
 ### Bounds checks (caused crashes on edge inputs)
 
@@ -237,12 +236,14 @@ Both are real-mode DOS TSRs that must be loaded *before* the game starts. The dr
 
 To enable audio for a 16-bit demo that uses sound (chap06 demos, chap09's Starblazer):
 
-1. Load the digital sound driver:
+1. **Generate the runtime drivers (one-time, in [audio/DRIVERS/](audio/DRIVERS/)).** The repo ships the canonical *source* drivers — the card-specific DIGPAK drivers (`SBPRO.COM`, `SB16.COM`, `ADLIB.COM`, …), the music TSR `MIDPAK.COM`, the synth drivers (`SBFM.ADV`, …) and patch sets (`FAT.OPL`, …) — plus the DIGPAK/MIDPAK setup tools. It does **not** ship the per-machine *configured* drivers those tools produce. Run:
+   ```
+   SETUP.BAT
+   ```
+   It runs `SETD`, which detects your sound card and writes **`SOUNDRV.COM`** (a copy of your card's digital driver with the right port/IRQ/DMA baked in; see [the DIGPAK/MIDPAK context below](#why-a-game-shipped-its-own-sound-drivers-digpakmidpak-in-context) for why that matters), then `SETM`, which writes the music driver's synth/patch files (e.g. `MIDPAK.ADV` ← `SBFM.ADV`, `MIDPAK.AD` ← `FAT.OPL`) for `MIDPAK.COM` to load. These generated files (`SOUNDRV.COM`, `MIDPAK.ADV`, `MIDPAK.AD`) are `.gitignore`d, like the other build artifacts.
+2. Load the drivers before starting the game:
    ```
    SOUNDRV.COM
-   ```
-2. Load the music driver:
-   ```
    MIDPAK.COM
    ```
 3. Run the game. Pass any sound/music command-line switches the game expects (Starblazer takes `S` and `M` — e.g. `blazer s m` for both digital effects and music).
@@ -257,7 +258,7 @@ MIDPAK plays **XMIDI (`.XMI`)** files only — it does not play standard `.MID` 
 
 ### Why a game shipped its own sound drivers (DIGPAK/MIDPAK in context)
 
-DOS had **no OS-level sound API**. A game couldn't ask the operating system to "play this sound" — it had to talk to the sound hardware itself, and the hardware was wildly fragmented (Sound Blaster, AdLib, Gravis UltraSound, Pro Audio Spectrum, Roland MT-32, …), each with different ports, IRQ/DMA, and register layouts. So games bundled a **sound engine**, and a market grew for licensable middleware that abstracted the cards behind a single interface — exactly as VESA's VBE did for SVGA. DIGPAK/MIDPAK's abstraction is the **INT 66h** API: a card-specific `.COM` driver (e.g. `SOUNDRV.COM`) implements it, and the game makes the same calls regardless of card. The driver has the port/IRQ/DMA baked in, set at install time by DIGPAK's `SETD`/`SETM` detection tools — which is why an emulator whose sound card sits on a different IRQ than the driver was configured for stays silent (DOSBox-X's SB16 is IRQ 7; VirtualBox's is IRQ 5).
+DOS had **no OS-level sound API**. A game couldn't ask the operating system to "play this sound" — it had to talk to the sound hardware itself, and the hardware was wildly fragmented (Sound Blaster, AdLib, Gravis UltraSound, Pro Audio Spectrum, Roland MT-32, …), each with different ports, IRQ/DMA, and register layouts. So games bundled a **sound engine**, and a market grew for licensable middleware that abstracted the cards behind a single interface — exactly as VESA's VBE did for SVGA. DIGPAK/MIDPAK's abstraction is the **INT 66h** API: a card-specific `.COM` driver (e.g. `SOUNDRV.COM`) implements it, and the game makes the same calls regardless of card. The driver has the port/IRQ/DMA baked in, set at install time by DIGPAK's `SETD`/`SETM` detection tools — which is why an emulator whose sound card sits on a different IRQ than the driver was configured for stays silent (DOSBox-X's SB16 is IRQ 7).
 
 DIGPAK and MIDPAK were written by **John Ratcliff** (The Audio Solution). The kit's own licensee list — shipped in this repo at [audio/DRIVERS/README.PRN](audio/DRIVERS/README.PRN) — shows the customer base was mostly RPGs, wargames, and edutainment: SSI's *Gold Box* AD&D titles, Activision's *Return to Zork* and *MechWarrior 2*, Trilobyte's *The 7th Guest*, Interplay's *Battle Chess 4000*, the Humongous/edutainment catalogue (*Putt-Putt*, *Oregon Trail Deluxe*), and others. Notably, **MIDPAK's music engine is built on John Miles' AIL** (Audio Interface Library) — which is why the `.ADV` synth drivers in `audio/DRIVERS` carry a "Copyright Miles Design" header and why MIDPAK plays the AIL-native `.XMI` format.
 
@@ -321,7 +322,7 @@ dosbox-x -conf dosbox/blzrx-join.conf
 
 Notes:
 - The configs use **paths relative to the repository root** (`mount c chap09`, etc.), so there's nothing machine-specific to edit — just launch them with the repo root as your working directory (see above). Works regardless of where the repo is checked out.
-- **Audio is on the first instance only.** The host/answer config mounts [audio/DRIVERS/](audio/DRIVERS/) as `D:`, loads `SOUNDRV.COM` + `MIDPAK.COM`, and runs the game with `s m` (sound + music); the join/dial config runs **silent** so you don't get two overlapping soundtracks on one machine. (The `term1`/`term2` configs have no audio.) 32-bit audio goes through the DPMI bridge and is less exercised than 16-bit.
+- **Audio is on the first instance only.** The host/answer config mounts [audio/DRIVERS/](audio/DRIVERS/) as `D:`, loads `SOUNDRV.COM` + `MIDPAK.COM`, and runs the game with `s m` (sound + music); the join/dial config runs **silent** so you don't get two overlapping soundtracks on one machine. (The `term1`/`term2` configs have no audio.) 32-bit audio goes through the DPMI bridge and is less exercised than 16-bit. **Note:** `SOUNDRV.COM` is not shipped — run `SETUP.BAT` (or `SETD`) once in `audio/DRIVERS` to generate it (see [Audio](#audio)); until you do, the host instance just starts without digital sound.
 - Modem configs (and `term2`) share `dosbox/phonebook.txt`, which maps the dialed number `5551234` → `127.0.0.1:5000`. For two real machines, change that to the answerer's LAN IP. You can also dial `127.0.0.1:5000` directly in-game to skip the phonebook.
 - **Launch order matters** — the host/server/answer instance must be up first, or the other side gets `NO CARRIER` / can't pair.
 
