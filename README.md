@@ -20,8 +20,9 @@ A hand-converted port of every demo and engine module from André LaMothe's 1995
 
 ## What this is
 
-LaMothe's *Black Art of 3D Game Programming* (1995, Waite Group Press) was the canonical "how to write a 3D engine in DOS" tome of the era. The book's CD shipped with full source for a software rasterizer engine, a series of chapter-by-chapter demos building up to that engine, and two complete game demos:
+LaMothe's *Black Art of 3D Game Programming* (1995, Waite Group Press) was the canonical "how to write a 3D engine in DOS" tome of the era. The book's CD shipped with full source for a software rasterizer engine, a series of chapter-by-chapter demos building up to that engine, and three complete game demos:
 
+- **Starblazer** (chapter 9) — two-player top-down space-combat game, originally played head-to-head over a modem/serial link; this port extends it with **IPX LAN play** (see [Networking](#networking-lan-play))
 - **Starblazer 3-D** (chapter 17) — asteroids-style first-person 3D space shooter
 - **Kill or Be Killed** (chapter 18) — mech-vs-aliens 3D action game with HUD, inventory, modem multiplayer
 
@@ -101,7 +102,7 @@ The engine is split across multiple `black*` modules following the book's chapte
 | 6 | `digidemo.c`, `mididemo.c` | Sound (.VOC) and music (.XMI) playback |
 | 7 | `critters.c`, `floater.c`, `jumper.c`, `lockon.c`, `lostnspc.c` | Sprite animation demos |
 | 8 | `timer.c`, `vblank.c`, `jelly.c`, `volcano.c` | Timer ISR, vertical blank, palette animation |
-| 9 | `term1.c`, `term2.c`, **`blazer.c`** | Modem terminal builds up to **Hover Blazer** — modem multiplayer game |
+| 9 | `term1.c`, `term2.c`, **`blazer.c`** | Modem terminal builds up to **Starblazer** — modem multiplayer game |
 | 11 | `linedemo.c`, `wiredemo.c` | First 3D wireframe demos |
 | 12 | `tridemo.c`, `solidemo.c`, `gourdemo.c`, `textdemo.c` | Flat-shaded, Gouraud, textured triangles |
 | 13 | `sol2demo.c` | Solid-shaded multiple objects |
@@ -117,7 +118,7 @@ The larger demos (and chapters that benefit from flat-mode memory) have parallel
 
 | Directory | Project | Source | Notes |
 |---|---|---|---|
-| `ch09_32/` | `blazer32` | `../chap09/blazer.c` | Hover Blazer (32-bit DOS/4GW build) |
+| `ch09_32/` | `blazer32` | `../chap09/blazer.c` | Starblazer (32-bit DOS/4GW build) |
 | `ch14_32/` | `obj_32` | `../chap14/objects.c` | |
 | `ch15_32/` | `bsp_32`, `sort_32`, `solz_32`, `zdemo_32` | `../chap15/*.c` | |
 | `ch16_32/` | `vox_32`, `voxt_32`, `voxo_32` | `../chap16/{voxel,voxtile,voxopt}.c` | |
@@ -219,7 +220,7 @@ The 16-bit projects produce ~50–100 KB MZ `.exe`s. The 32-bit projects produce
 
 ## Running under DOSBox-X
 
-**Use DOSBox-X, not vanilla DOSBox.** Vanilla DOSBox has incomplete emulation of the DOS System File Table (SFT) and a low default limit on simultaneously open file handles. Games like Hover Blazer and Kill or Be Killed open dozens of asset files (PCX backgrounds, VOC sound effects, XMI music, PLG models) at startup, and several of them keep file handles open across scenes. Under vanilla DOSBox this can cause apparent crashes or silent failures partway through a game's load sequence.
+**Use DOSBox-X, not vanilla DOSBox.** Vanilla DOSBox has incomplete emulation of the DOS System File Table (SFT) and a low default limit on simultaneously open file handles. Games like Starblazer and Kill or Be Killed open dozens of asset files (PCX backgrounds, VOC sound effects, XMI music, PLG models) at startup, and several of them keep file handles open across scenes. Under vanilla DOSBox this can cause apparent crashes or silent failures partway through a game's load sequence.
 
 DOSBox-X reworked SFT emulation (dynamic allocation, per the DOSBox-X release notes) and is the more compatible host for any of the larger book demos. Get it from [dosbox-x.com](https://dosbox-x.com).
 
@@ -234,7 +235,7 @@ The book uses two commercial 1990s sound libraries:
 
 Both are real-mode DOS TSRs that must be loaded *before* the game starts. The drivers ship in [audio/DRIVERS/](audio/DRIVERS/) (sound-card-specific drivers, MIDPAK variants for different synths) and patch sets in [audio/PATCHES/](audio/PATCHES/).
 
-To enable audio for a 16-bit demo that uses sound (chap06 demos, chap09's Hover Blazer):
+To enable audio for a 16-bit demo that uses sound (chap06 demos, chap09's Starblazer):
 
 1. Load the digital sound driver:
    ```
@@ -244,13 +245,13 @@ To enable audio for a 16-bit demo that uses sound (chap06 demos, chap09's Hover 
    ```
    MIDPAK.COM
    ```
-3. Run the game. Pass any sound/music command-line switches the game expects (Hover Blazer takes `S` and `M` — e.g. `blazer s m` for both digital effects and music).
+3. Run the game. Pass any sound/music command-line switches the game expects (Starblazer takes `S` and `M` — e.g. `blazer s m` for both digital effects and music).
 
 The TSRs hook INT 66h; the engine calls them via inline assembly stubs in `engine/black6.c`.
 
 ### Music file format
 
-MIDPAK plays **XMIDI (`.XMI`)** files only — it does not play standard `.MID` files. The original book CD and the DIGPAK/MIDPAK kit shipped a set of demo `.XMI` tunes, but those were third-party copyrighted music (other games' soundtracks and a commercial demo album) and have been removed — see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). The only `.XMI` files kept in this repo are the book's **own** game soundtracks: `BLAZEMUS.XMI` (Hover Blazer, in `chap06/`, `chap09/`, and the `blzrx*` dirs) and `KRKMUS.XMI` (Kill or Be Killed, in `chap18/`). To exercise `chap06/mididemo.c`, enter `BLAZEMUS.XMI` at the prompt, or drop in any `.XMI` file you have the rights to and enter its name.
+MIDPAK plays **XMIDI (`.XMI`)** files only — it does not play standard `.MID` files. The original book CD and the DIGPAK/MIDPAK kit shipped a set of demo `.XMI` tunes, but those were third-party copyrighted music (other games' soundtracks and a commercial demo album) and have been removed — see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). The only `.XMI` files kept in this repo are the book's **own** game soundtracks: `BLAZEMUS.XMI` (Starblazer, in `chap06/`, `chap09/`, and the `blzrx*` dirs) and `KRKMUS.XMI` (Kill or Be Killed, in `chap18/`). To exercise `chap06/mididemo.c`, enter `BLAZEMUS.XMI` at the prompt, or drop in any `.XMI` file you have the rights to and enter its name.
 
 32-bit DOS/4GW builds use the DPMI bridge in `engine/dpmi.c` to reach the real-mode TSRs. The same `SOUNDRV.COM` / `MIDPAK.COM` setup applies — load them before launching the 32-bit executable, identical to the 16-bit flow. The bridge transparently allocates DOS conventional memory for the VOC and XMIDI buffers via INT 31h func 0100h and dispatches each INT 66h call through INT 31h func 0300h.
 
