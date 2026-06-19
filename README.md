@@ -252,7 +252,7 @@ The TSRs hook INT 66h; the engine calls them via inline assembly stubs in `engin
 
 ### Music file format
 
-MIDPAK plays **XMIDI (`.XMI`)** files only — it does not play standard `.MID` files. The original book CD and the DIGPAK/MIDPAK kit shipped a set of demo `.XMI` tunes, but those were third-party copyrighted music (other games' soundtracks and a commercial demo album) and have been removed — see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). The only `.XMI` files kept in this repo are the book's **own** game soundtracks: `BLAZEMUS.XMI` (Starblazer, in `chap06/`, `chap09/`, and the `blzrx*` dirs) and `KRKMUS.XMI` (Kill or Be Killed, in `chap18/`). To exercise `chap06/mididemo.c`, enter `BLAZEMUS.XMI` at the prompt, or drop in any `.XMI` file you have the rights to and enter its name.
+MIDPAK plays **XMIDI (`.XMI`)** files only — it does not play standard `.MID` files. The only `.XMI` files kept in this repo are the book's **own** game soundtracks: `BLAZEMUS.XMI` (Starblazer, in `chap06/`, `chap09/`, and the `blzrx*` dirs) and `KRKMUS.XMI` (Kill or Be Killed, in `chap18/`). To exercise `chap06/mididemo.c`, enter `BLAZEMUS.XMI` at the prompt, or drop in any `.XMI` file you have the rights to and enter its name.
 
 32-bit DOS/4GW builds use the DPMI bridge in `engine/dpmi.c` to reach the real-mode TSRs. The same `SOUNDRV.COM` / `MIDPAK.COM` setup applies — load them before launching the 32-bit executable, identical to the 16-bit flow. The bridge transparently allocates DOS conventional memory for the VOC and XMIDI buffers via INT 31h func 0100h and dispatches each INT 66h call through INT 31h func 0300h.
 

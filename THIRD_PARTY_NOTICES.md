@@ -65,9 +65,8 @@ the source from the companion CD of André LaMothe's *Black Art of 3D Game Progr
 
 ## Not included
 
-The DIGPAK/MIDPAK distribution kit originally shipped **demo music and sound effects**
+The DIGPAK/MIDPAK distribution kit shipped **demo music and sound effects**
 (`.XMI` / `.SND`) showcasing other companies' games and Rob Wallace's commercial
 *Kaleidosonics* product — e.g. Software Toolworks (*Mario's Missing*), Trilobyte/Virgin
 (*The 7th Guest*), Electronic Arts (*Seawolf*), and Capstone (*Wayne's World*). That material
-is **third-party copyrighted, was not used by this port, and is not included** in this
-repository. Only the drivers themselves (§2–§4) and the book's own game music (§5) are kept.
+is **third-party copyrighted, was not used by this port except by the driver setup**.
