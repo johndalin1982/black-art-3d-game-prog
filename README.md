@@ -250,9 +250,17 @@ The TSRs hook INT 66h; the engine calls them via inline assembly stubs in `engin
 
 ### Music file format
 
-MIDPAK plays **XMIDI (`.XMI`)** files only — it does not play standard `.MID` files. The original book CD shipped 17 `.XMI` files for the chap06 sound/music chapter in the CD's `MSC/CHAP_6/DRIVERS/` (the book's own folder, not part of this repo); the same set is bundled here under [audio/DRIVERS/](audio/DRIVERS/) (TITLE.XMI, MARIO.XMI, FUNK.XMI, etc.). To exercise `chap06/mididemo.c`, copy one or more of those into `chap06/` and enter the filename when the menu prompts. The Hover Blazer soundtrack (`chap06/BLAZEMUS.XMI`, also used by `chap09/blazer.c`) is the only `.XMI` already present in `chap06/`.
+MIDPAK plays **XMIDI (`.XMI`)** files only — it does not play standard `.MID` files. The original book CD and the DIGPAK/MIDPAK kit shipped a set of demo `.XMI` tunes, but those were third-party copyrighted music (other games' soundtracks and a commercial demo album) and have been removed — see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). The only `.XMI` files kept in this repo are the book's **own** game soundtracks: `BLAZEMUS.XMI` (Hover Blazer, in `chap06/`, `chap09/`, and the `blzrx*` dirs) and `KRKMUS.XMI` (Kill or Be Killed, in `chap18/`). To exercise `chap06/mididemo.c`, enter `BLAZEMUS.XMI` at the prompt, or drop in any `.XMI` file you have the rights to and enter its name.
 
 32-bit DOS/4GW builds use the DPMI bridge in `engine/dpmi.c` to reach the real-mode TSRs. The same `SOUNDRV.COM` / `MIDPAK.COM` setup applies — load them before launching the 32-bit executable, identical to the 16-bit flow. The bridge transparently allocates DOS conventional memory for the VOC and XMIDI buffers via INT 31h func 0100h and dispatches each INT 66h call through INT 31h func 0300h.
+
+### Why a game shipped its own sound drivers (DIGPAK/MIDPAK in context)
+
+DOS had **no OS-level sound API**. A game couldn't ask the operating system to "play this sound" — it had to talk to the sound hardware itself, and the hardware was wildly fragmented (Sound Blaster, AdLib, Gravis UltraSound, Pro Audio Spectrum, Roland MT-32, …), each with different ports, IRQ/DMA, and register layouts. So games bundled a **sound engine**, and a market grew for licensable middleware that abstracted the cards behind a single interface — exactly as VESA's VBE did for SVGA. DIGPAK/MIDPAK's abstraction is the **INT 66h** API: a card-specific `.COM` driver (e.g. `SOUNDRV.COM`) implements it, and the game makes the same calls regardless of card. The driver has the port/IRQ/DMA baked in, set at install time by DIGPAK's `SETD`/`SETM` detection tools — which is why an emulator whose sound card sits on a different IRQ than the driver was configured for stays silent (DOSBox-X's SB16 is IRQ 7; VirtualBox's is IRQ 5).
+
+DIGPAK and MIDPAK were written by **John Ratcliff** (The Audio Solution). The kit's own licensee list — shipped in this repo at [audio/DRIVERS/README.PRN](audio/DRIVERS/README.PRN) — shows the customer base was mostly RPGs, wargames, and edutainment: SSI's *Gold Box* AD&D titles, Activision's *Return to Zork* and *MechWarrior 2*, Trilobyte's *The 7th Guest*, Interplay's *Battle Chess 4000*, the Humongous/edutainment catalogue (*Putt-Putt*, *Oregon Trail Deluxe*), and others. Notably, **MIDPAK's music engine is built on John Miles' AIL** (Audio Interface Library) — which is why the `.ADV` synth drivers in `audio/DRIVERS` carry a "Copyright Miles Design" header and why MIDPAK plays the AIL-native `.XMI` format.
+
+It was one of several such systems. For the wider picture: **Miles AIL / Miles Sound System** (John Miles) was the dominant commercial choice (Westwood, MicroProse, Blizzard, later Origin); **iMUSE** was LucasArts' in-house engine; **DMX** (Paul Radek) powered id's DOOM/Heretic/Hexen; and **HMI Sound Operating System** drove Descent, Daggerfall, and Fallout. The book's engine (`engine/black6.c`) targets DIGPAK/MIDPAK specifically.
 
 ## Networking (LAN play)
 
@@ -334,8 +342,18 @@ For two real machines instead of one PC, point the joining/dialing side at the h
 - **Conversion to modern coding style + bug fixes**: this repository's contributor
 - **AI assistance (Claude Opus)**: the later/larger chapters and the original extensions were done with help from Anthropic's Claude Opus — Starblazer 3-D (chapter 17), the voxel demos (chapter 16), Kill or Be Killed (chapter 18), the 32-bit DOS/4GW conversions, and the IPX LAN-multiplayer layer.
 
-The original 1995 source was bundled with the book and CD. This port restructures it for modern toolchains; the underlying algorithms and architecture remain LaMothe's. If you want to learn how 3D rendering worked before GPUs, read the book; it's still in print as a used book and the techniques are foundational.
+The original 1995 source was bundled with the book and CD. This port restructures it for modern toolchains; the underlying algorithms and architecture remain LaMothe's. If you want to learn how 3D rendering worked before GPUs, read the book; it's still findable used and the techniques are foundational.
 
-The book and its CD is digitally available on the archive.org website:
+### Licensing
+
+This repository mixes work under **different terms**, so the licensing is layered:
+
+- The **contributors' own work** — the coding-style conversion, the bug fixes, the 32-bit ports, the IPX/DPMI networking layer, the build files, the DOSBox-X configs, and this documentation — is released under the **MIT License** ([LICENSE](LICENSE)).
+- The **original book code** remains © André LaMothe / Waite Group Press (rights now likely held by Pearson and/or the author). It is **not** relicensed here; this is an **unofficial, non-commercial, educational port**, and the maintainers will honor any takedown request from the rights holder. Please own a copy of the book.
+- The bundled **sound drivers** are redistributable under their authors' own later grants — DIGPAK is MIT (John Ratcliff, 2021) and the AIL synth drivers are open-source freeware (John Miles, 2000). The Fat Man's General MIDI patches are retained with their required credit.
+
+Full per-component details are in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+
+The book and its CD are digitally available on archive.org:
 - https://archive.org/details/BlackArt3DEBook
 - https://archive.org/details/BlackArtOf3DGameProgramming

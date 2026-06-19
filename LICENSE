@@ -1,0 +1,35 @@
+MIT License — repository contributions only
+
+Copyright (c) 2026 Black Art of 3D Game Programming port contributors
+
+This repository combines original work by its contributors with third-party
+components that remain under their own copyrights and licenses. The MIT grant
+below applies ONLY to the contributors' own work — the modernized coding-style
+conversion, the bug fixes, the 32-bit DOS/4GW ports, the IPX LAN-multiplayer
+layer (engine/ipx.c, engine/dpmi.c), the build/project files, the DOSBox-X
+configs, and this documentation.
+
+It does NOT relicense any third-party component. In particular it does NOT cover
+the original "Black Art of 3D Game Programming" source by André LaMothe, nor the
+bundled sound drivers, instrument patches, or music. Those remain under their
+respective owners' terms — see THIRD_PARTY_NOTICES.md for the full breakdown.
+
+-------------------------------------------------------------------------------
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of the contributors' work in this software (as scoped above) and associated
+documentation files (the "Software"), to deal in the Software without
+restriction, including without limitation the rights to use, copy, modify,
+merge, publish, distribute, sublicense, and/or sell copies of the Software, and
+to permit persons to whom the Software is furnished to do so, subject to the
+following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS
+FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
+COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
+IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
+CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
