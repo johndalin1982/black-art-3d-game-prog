@@ -15,6 +15,7 @@ A hand-converted port of every demo and engine module from André LaMothe's 1995
 - [Building](#building)
 - [Running under DOSBox-X](#running-under-dosbox-x)
 - [Audio](#audio)
+- [Single-player AI](#single-player-ai)
 - [Networking (LAN play)](#networking-lan-play)
 - [Credits and license](#credits-and-license)
 
@@ -22,7 +23,7 @@ A hand-converted port of every demo and engine module from André LaMothe's 1995
 
 LaMothe's *Black Art of 3D Game Programming* (1995, Waite Group Press) was the canonical "how to write a 3D engine in DOS" tome of the era. The book's CD shipped with full source for a software rasterizer engine, a series of chapter-by-chapter demos building up to that engine, and three complete game demos:
 
-- **Starblazer** (chapter 9) — two-player top-down space-combat game, originally played head-to-head over a modem/serial link; this port extends it with **IPX LAN play** (see [Networking](#networking-lan-play))
+- **Starblazer** (chapter 9) — two-player top-down space-combat game, originally played head-to-head over a modem/serial link; this port extends it with **IPX LAN play** (see [Networking](#networking-lan-play)) and a **single-player mode with an AI-controlled enemy ship** (see [Single-player AI](#single-player-ai))
 - **Starblazer 3-D** (chapter 17) — asteroids-style first-person 3D space shooter
 - **Kill or Be Killed** (chapter 18) — single-player mech-vs-aliens 3D action game with a HUD, radar scanner, and selectable battle mechs
 
@@ -263,6 +264,28 @@ DOS had **no OS-level sound API**. A game couldn't ask the operating system to "
 DIGPAK and MIDPAK were written by **John Ratcliff** (The Audio Solution). The kit's own licensee list — shipped in this repo at [audio/DRIVERS/README.PRN](audio/DRIVERS/README.PRN) — shows the customer base was mostly RPGs, wargames, and edutainment: SSI's *Gold Box* AD&D titles, Activision's *Return to Zork* and *MechWarrior 2*, Trilobyte's *The 7th Guest*, Interplay's *Battle Chess 4000*, the Humongous/edutainment catalogue (*Putt-Putt*, *Oregon Trail Deluxe*), and others. Notably, **MIDPAK's music engine is built on John Miles' AIL** (Audio Interface Library) — which is why the `.ADV` synth drivers in `audio/DRIVERS` carry a "Copyright Miles Design" header and why MIDPAK plays the AIL-native `.XMI` format.
 
 It was one of several such systems. For the wider picture: **Miles AIL / Miles Sound System** (John Miles) was the dominant commercial choice (Westwood, MicroProse, Blizzard, later Origin); **iMUSE** was LucasArts' in-house engine; **DMX** (Paul Radek) powered id's DOOM/Heretic/Hexen; and **HMI Sound Operating System** drove Descent, Daggerfall, and Fallout. The book's engine (`engine/black6.c`) targets DIGPAK/MIDPAK specifically.
+
+## Single-player AI
+
+The book's **Play Solo** menu item originally dropped you into the arena alone — the enemy ship sat inert at its spawn as a stationary target for practice. This port turns Solo into an actual single-player mode: the enemy ship is flown by a small **AI opponent** that hunts you down, lines up shots, fires, and raises its shields against incoming fire.
+
+The implementation reuses the game's existing two-player machinery rather than bolting on a parallel code path. In Starblazer the "remote" (enemy) ship is already simulated *locally* on each machine from a one-byte input of `REMOTE_*` action flags (turn left/right, thrust, fire, shields, cloak); in head-to-head play that byte arrives over the link each frame (`serialReadWait()`), and the same code re-simulates the remote ship, its collisions, death, and rendering. The AI simply **synthesizes that input byte** instead of reading it from the network — every frame `computeRemoteAi()` (in [chap09/blazer.c](chap09/blazer.c)) decides which "keys" the enemy presses, and the unchanged remote simulation does the rest. A single `AiEnabled` flag swaps the input source and opens the collision/death paths that were previously gated on a live link.
+
+The enemy runs a small **behavior state machine** that cycles between three modes. It mostly **circles you (Strafe)**, mixing in shorter aggressive pushes and the occasional break:
+
+- **Strafe** *(the most common)* — circle the player at a held radius. When it has matched your speed it's free to face you, so it still fires while circling, but it's less relentless than a head-on push.
+- **Hunt** — close to a short distance, then pace the player and fire. The aggressive mode; this is where the heaviest shooting happens.
+- **Flee** — back off to reposition (holding fire), and where it retreats to conserve power when its *own* energy runs low.
+
+**Smooth movement was the hard part, and the fix is the important bit:** the enemy steers its **velocity**, not its position. Each frame it computes a *target velocity* — the player's own velocity, plus a small per-behavior maneuver (toward you for Hunt, sideways for Strafe, away for Flee) — and only thrusts to correct the difference. Chasing a *position* with momentum is what made earlier versions spin, weave, and jerk: the bearing to a fast-moving player swings wildly, the ship overshoots and loops, and because the camera is locked to the player anything not matching the player's velocity lurches across the screen. Pacing the player's *velocity* fixes all three at once — the enemy glides, never builds runaway momentum, and (since it's then free to point at you) faces you and shoots. When its velocity already matches the target it simply faces the player, which is the common, calm-looking case. A hard backstop (`AI_RETURN_DIST` / `AI_LEASH_X` / `AI_LEASH_Y`) still drags it back if it's ever knocked out of view. Tuning lives in the `AI_*` knobs near the top of [chap09/blazer.c](chap09/blazer.c) — `AI_MANEUVER` (maneuver speed), `AI_VEL_TOL` (how loosely it matches before it stops correcting and shoots), the per-state distances, and the fire-rate set.
+
+**Cloak blinds it.** The enemy can only track the player while the player is visible — the instant you engage your cloaking device it loses the lock. It remembers the last spot it saw you, steers toward *that* point, and holds fire until you decloak, so the cloak genuinely shakes its aim and lets you slip away and reposition (the view follows you, so it falls behind off-screen until you reappear). And on defense, it raises its own shields only against a missile that is both close *and* actually closing in on it — not any shot that happens to drift past — so its shielding reads as a deliberate reaction rather than random flicker.
+
+**Shields are a committed cooldown ability** for both ships. Raising shields commits them for a fixed ~5.5-second window that can't be dropped early, after which they must recharge for another ~5.5 seconds before they can be raised again (`SHIELD_ON_TIME` / `SHIELD_COOLDOWN_TIME`). This replaces the old behavior where shields could be re-triggered the instant they expired — which, combined with the AI reacting to every passing shot, made the enemy's shields flicker on and off. Now both you and the enemy have to time a single shield window and then ride out the recharge.
+
+The underlying mechanics are shared with the player and deliberately classic-arcade: it aims by picking, of the 16 ship headings, the one whose motion vector best matches the target direction (integer dot-product, no trig) and rotates one step per frame toward it — the same turn rate you have; and it thrusts and fires under the same velocity cap, energy costs, and space-friction the player ship obeys. All the tuning lives in named `AI_*` `#define`s at the top of [chap09/blazer.c](chap09/blazer.c) (fire range, cooldown, max shots in flight, thrust stand-off, shield reaction), so the difficulty is a one-line change.
+
+Because the AI ship is a normal remote ship, it is fully part of the world: it dies to your missiles and to asteroids, its kills end the match, it shows up on the scanner, and it takes the opposite ship type (Gryfon vs. Raptor) from the one you picked. To play, just choose **Play Solo** from the setup menu — no link setup, no second instance. The AI path is in the shared `chap09/blazer.c`, so every Starblazer build (`blazer`, `blzrx`, `blzrx32`) gets it.
 
 ## Networking (LAN play)
 

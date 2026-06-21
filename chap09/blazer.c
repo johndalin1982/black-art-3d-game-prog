@@ -240,6 +240,13 @@
 #define PLAYERS_SHIELD_REG          240 // color registers of players shield
 #define REMOTES_SHIELD_REG          241 // color and remotes shield color
 
+// shield timing (applies to both the player and the enemy AI). Once raised,
+// shields stay up for SHIELD_ON_TIME frames and CANNOT be dropped early; when
+// they expire they must recharge for SHIELD_COOLDOWN_TIME frames before they
+// can be raised again. The game runs at ~18 fps, so 100 frames is ~5.5 seconds.
+#define SHIELD_ON_TIME              100
+#define SHIELD_COOLDOWN_TIME        100
+
 // engine defines
 #define PLAYERS_ENGINE_REG          242 // color registers for engine flicker
 // BUG FIX: the book defined this as 241 — the SAME register as REMOTES_SHIELD_REG
@@ -269,6 +276,46 @@
 #define REMOTE_CLOAK                16
 #define REMOTE_FIRE                 32
 #define REMOTE_ESC                  64
+
+// single-player AI difficulty knobs. Lower the fire cooldown / raise the range and
+// missile count to make the enemy shoot more; do the opposite to ease off.
+#define AI_FIRE_RANGE       230     // shoots at the player within this Manhattan distance
+#define AI_FIRE_COOLDOWN    24      // base frames between shots (smaller = more shooting)
+#define AI_FIRE_JITTER      12      // random extra frames added to the cooldown
+#define AI_MAX_MISSILES     2       // most AI shots allowed in flight at once (sim cap 5)
+#define AI_SHIELD_RANGE     40      // raises shields only for missiles this close
+#define AI_START_GRACE      36      // frames of "hold fire" when a solo game starts
+#define AI_LOW_ENERGY       1500    // below this the enemy breaks off to conserve
+
+// Smooth movement. The enemy steers its *velocity* (not its position): each frame
+// it aims for the player's velocity plus a small per-behavior maneuver, and only
+// thrusts to correct the difference. Matching the player's velocity means it
+// glides on the (player-locked) screen instead of lurching, and it never builds
+// runaway momentum - which is what removes the spin / weave / jerk.
+// AI_MANEUVER is the maneuver speed (x the ~3-unit heading vector => ~6 px/frame,
+// under the ship's max of 8, so the player can still outrun it). AI_VEL_TOL is how
+// close to matched counts as good enough: within it the ship stops correcting and
+// faces the player to shoot, which is the common, calm-looking case.
+#define AI_MANEUVER         2
+#define AI_VEL_TOL          4
+
+// engagement distances (Manhattan) the behaviors hold relative to the player
+#define AI_HUNT_DIST        60      // HUNT closes to here, then paces the player and fires
+#define AI_STRAFE_DIST      100     // STRAFE circles at this radius
+#define AI_STRAFE_BAND      25      // STRAFE nudges in/out only beyond this band around
+                                    // AI_STRAFE_DIST; inside it it just circles (no jitter)
+#define AI_FLEE_DIST        120     // FLEE backs off to here
+
+// Backstop so it never leaves the player's ~320x200 view: beyond the return
+// distance, or past the per-axis leash, it drops everything and heads back in.
+#define AI_RETURN_DIST      140     // Manhattan distance that forces a return
+#define AI_LEASH_X          150     // max horizontal stray before forcing a return
+#define AI_LEASH_Y          100     // max vertical stray before forcing a return
+
+// enemy AI behavior states
+#define AI_HUNT             0       // close in, pace the player, and shoot (most common)
+#define AI_STRAFE           1       // circle the player at range
+#define AI_FLEE             2       // back off to reposition (no firing)
 
 // this is the structure for the asteroids
 typedef struct AsteroidType {
@@ -351,6 +398,9 @@ void startPlayersDeath(void);
 void resetPlayer(void);
 void resetRemote(void);
 void startRemotesDeath(void);
+int aiHeading(int vx, int vy);
+void aiPickState(void);
+int computeRemoteAi(void);
 void panelFx(void);
 void eraseMissiles(void);
 void underMissiles(void);
@@ -455,6 +505,17 @@ int Master = 1,                     // the player dials up a player
     Linked = 0,                     // state of the model communications system
     Winner = WINNER_NONE;           // the winner of the game
 
+// single-player support: when AiEnabled is set the remote ship is flown by the
+// computer instead of a networked peer. The AI produces the same REMOTE_* input
+// byte a human would send, so the whole remote simulation runs unchanged.
+int AiEnabled    = 0,               // 1 = remote ship is AI controlled (solo play)
+    AiFireDelay  = 0,               // cooldown counter between AI shots
+    AiState      = AI_HUNT,         // the enemy's current behavior mode
+    AiStateTimer = 0,               // frames left before re-choosing a behavior
+    AiOrbitDir   = 1,               // +1 / -1: which way STRAFE / WANDER circles
+    AiLastX      = 0,               // last spot the enemy saw the player at - it
+    AiLastY      = 0;               // steers here (and holds fire) while cloaked
+
 // the start up arrays used to differentiate the player and remote
 
 // master is index 1, slave is index 0
@@ -476,7 +537,8 @@ int PlayersLastX          = 0,      // the last position of player
     PlayersFlameTime      = 1,
     PlayersGravity        = 0,      // current gravitron count
     PlayersShields        = 0,      // state of the shields
-    PlayersShieldTime     = 0,      // how long shields have been on
+    PlayersShieldTime     = 0,      // frames left in the current shield-up period
+    PlayersShieldCooldown = 0,      // frames left before shields can be raised again
     PlayersCloak          = -1,     // state of the cloak -1 off 1 on
     PlayersHeads          = -1,     // state of heads up display
     PlayersComm           = -1,     // state of comm link
@@ -514,7 +576,8 @@ int RemotesLastX          = 0,      // the last position of player
     RemotesFlameTime      = 1,
     RemotesGravity        = 0,      // current gravitron count
     RemotesShields        = 0,      // state of the shields
-    RemotesShieldTime     = 0,      // how long shields have been on
+    RemotesShieldTime     = 0,      // frames left in the current shield-up period
+    RemotesShieldCooldown = 0,      // frames left before shields can be raised again
     RemotesCloak          = -1,     // state of the cloak -1 off 1 on
     RemotesHeads          = -1,     // state of heads up display
     RemotesComm           = -1,     // comm link
@@ -654,16 +717,16 @@ char* Instructions[] = {
                "ENTERING INTO COMBAT               ",
                "                                   ",
                "TO PLAY THE GAME YOU CAN EITHER    ",
-               "PLAY IN THE SOLO MODE FOR PRACTICE ",
-               "OR MODEM-2-MODEM. TO PLAY SOLO     ",
-               "MODE,SELECT THE SHIP YOU LIKE BY   ",
-               "USING THE SELECT SHIP OPTION ON    ",
-               "THE MAIN MENU. ONCE YOU HAVE       ",
-               "SELECTED THE SHIP OF YOUR CHOICE,  ",
-               "USE THE PLAY SOLO OPTION AND YOU   ",
-               "WILL BE WARPED TO THE TALLEON      ",
-               "ASTEROID BELT FOR A PRACTICE       ",
-               "SESSION.                           ",
+               "PLAY SOLO AGAINST THE COMPUTER OR  ",
+               "MODEM-2-MODEM. IN SOLO MODE AN     ",
+               "AI-CONTROLLED ENEMY SHIP WILL HUNT ",
+               "YOU THROUGH THE ASTEROID BELT. TO  ",
+               "PLAY SOLO, PICK YOUR SHIP WITH THE ",
+               "SELECT SHIP OPTION ON THE MAIN     ",
+               "MENU, THEN USE THE PLAY SOLO       ",
+               "OPTION AND YOU WILL BE WARPED TO   ",
+               "THE TALLEON ASTEROID BELT TO       ",
+               "ENGAGE THE ENEMY.                  ",
                "                                   ",
                "                                   ",
                "                                   ",
@@ -1676,7 +1739,7 @@ void moveAsteroids(void) {
                 }
 
                 // test for collision
-                if (Linked) {
+                if (Linked || AiEnabled) {
                     if (RemotesX + SHIP_WIDTH / 2  >= astX &&
                         RemotesY + SHIP_HEIGHT / 2 >= astY &&
                         RemotesX + SHIP_WIDTH / 2  <= astX + Asteroids[index].rock.width &&
@@ -2563,7 +2626,7 @@ void moveMissiles(void) {
             }
 
             // test if missiles hit local player
-            if (Linked && PlayersState == ALIVE && Missiles[index].type == REMOTE_MISSILE) {
+            if ((Linked || AiEnabled) && PlayersState == ALIVE && Missiles[index].type == REMOTE_MISSILE) {
                 if (missX > PlayersX && missX < PlayersX + SHIP_WIDTH &&
                     missY > PlayersY && missY < PlayersY + SHIP_HEIGHT) {
 
@@ -2586,7 +2649,7 @@ void moveMissiles(void) {
             }
 
             // test if missile has hit remote player
-            if (Linked && RemotesState == ALIVE && Missiles[index].type == PLAYER_MISSILE) {
+            if ((Linked || AiEnabled) && RemotesState == ALIVE && Missiles[index].type == PLAYER_MISSILE) {
                 if (missX > RemotesX && missX < RemotesX + SHIP_WIDTH &&
                     missY > RemotesY && missY < RemotesY + SHIP_HEIGHT) {
 
@@ -2678,6 +2741,7 @@ void startPlayersDeath() {
     PlayersGravity = 0;
     PlayersShields = 0;
     PlayersShieldTime = 0;
+    PlayersShieldCooldown = 0;
     PlayersCloak = -1;
     PlayersState = DYING;
     PlayersDeathCount = 48;
@@ -2717,9 +2781,264 @@ void startRemotesDeath(void) {
     RemotesGravity = 0;
     RemotesShields = 0;
     RemotesShieldTime = 0;
+    RemotesShieldCooldown = 0;
     RemotesCloak = -1;
     RemotesState = DYING;
     RemotesDeathCount = 48;
+}
+
+int aiHeading(int vx, int vy) {
+    // returns the ship heading (0..15) whose motion vector best matches the
+    // direction (vx,vy), by maximizing the dot product against each heading.
+    // vx,vy stay within +/-1250 (half the universe) so the products fit an int.
+    int f, bestF, bestDot, dot;
+
+    bestF = 0;
+    bestDot = -32767;
+
+    for (f = 0; f < 16; f++) {
+        dot = vx * MotionDx[f] + vy * MotionDy[f];
+
+        if (dot > bestDot) {
+            bestDot = dot;
+            bestF = f;
+        }
+    }
+
+    return bestF;
+}
+
+void aiPickState(void) {
+    // choose the enemy's next behavior. HUNT (close in, pace the player, shoot)
+    // is the most common so it stays aggressive; STRAFE circles for variety;
+    // FLEE backs off to reposition, and is where it retreats when low on energy.
+    int r;
+
+    // our own energy is low: back off to stop bleeding power
+    if (RemotesEnergy < AI_LOW_ENERGY) {
+        AiState = AI_FLEE;
+        AiStateTimer = 35 + rand() % 35;
+        return;
+    }
+
+    r = rand() % 100;
+
+    // mostly STRAFE (circle the player), some HUNT, an occasional FLEE
+    if (r < 60) {
+        AiState = AI_STRAFE;
+        AiStateTimer = 50 + rand() % 50;
+        AiOrbitDir = (rand() & 1) ? 1 : -1;
+    } else if (r < 85) {
+        AiState = AI_HUNT;
+        AiStateTimer = 35 + rand() % 30;
+    } else {
+        AiState = AI_FLEE;
+        AiStateTimer = 25 + rand() % 25;
+    }
+}
+
+int computeRemoteAi(void) {
+    // single-player brain for the remote ship. It returns the same REMOTE_*
+    // input byte a human peer would have sent over the link, so the existing
+    // remote simulation, collision, death and drawing code all run unchanged -
+    // the AI just decides which "keys" the enemy ship presses each frame.
+    //
+    // It steers its VELOCITY, not its position: each frame it works out a target
+    // velocity (the player's velocity plus a small per-behavior maneuver) and only
+    // thrusts to correct the difference. Pacing the player's velocity makes it
+    // glide on the player-locked screen and stops it building runaway momentum, so
+    // it no longer spins / weaves / jerks. When its velocity already matches it
+    // faces the player and shoots - the common, calm case. The behavior states
+    // (HUNT / STRAFE / FLEE) just choose which maneuver velocity to aim for.
+    int dx, dy, dist, huntFrame, diffPlayer, diff, desiredFrame, keys, m, mdx, mdy;
+    int aiSees, returning, radial, tx, ty, mFrame;
+    int relMx, relMy, targetVx, targetVy, errVx, errVy, errMag;
+
+    keys = 0;
+
+    // The enemy can only track the player while the player is visible. The
+    // moment the player cloaks, the enemy loses the lock: it remembers the last
+    // place it saw the player, steers toward that spot, and holds fire until the
+    // player decloaks. So cloaking actually shakes the enemy's aim.
+    aiSees = (PlayersCloak == -1);
+
+    if (aiSees) {
+        AiLastX = PlayersX;
+        AiLastY = PlayersY;
+    }
+
+    // vector from the remote to its target - the player if visible, otherwise
+    // the last-seen position - taking the shorter way around the wrapped universe
+    dx = AiLastX - RemotesX;
+    dy = AiLastY - RemotesY;
+
+    if (dx > (UNIVERSE_WIDTH / 2)) {
+        dx -= UNIVERSE_WIDTH;
+    } else if (dx < -(UNIVERSE_WIDTH / 2)) {
+        dx += UNIVERSE_WIDTH;
+    }
+
+    if (dy > (UNIVERSE_HEIGHT / 2)) {
+        dy -= UNIVERSE_HEIGHT;
+    } else if (dy < -(UNIVERSE_HEIGHT / 2)) {
+        dy += UNIVERSE_HEIGHT;
+    }
+
+    // rough distance (Manhattan, avoids a square root)
+    dist = (dx < 0 ? -dx : dx) + (dy < 0 ? -dy : dy);
+
+    // heading that points straight at the player - used for closing in and for
+    // deciding when a shot would actually connect
+    huntFrame = aiHeading(dx, dy);
+    diffPlayer = (huntFrame - RemotesShip.currFrame) & 15;
+
+    // tick the behavior timer and choose a new behavior when it expires, or
+    // immediately when our energy runs low (so it stops bleeding power)
+    if (AiStateTimer > 0) {
+        AiStateTimer--;
+    }
+
+    if (AiStateTimer <= 0 ||
+        (AiState != AI_FLEE && RemotesEnergy < AI_LOW_ENERGY)) {
+
+        aiPickState();
+    }
+
+    // Backstop so the enemy never leaves the player's view: beyond the return
+    // distance or the per-axis leash, override the behavior and close straight in.
+    returning = (dist > AI_RETURN_DIST) ||
+                ((dx < 0 ? -dx : dx) > AI_LEASH_X) ||
+                ((dy < 0 ? -dy : dy) > AI_LEASH_Y);
+
+    // --- the maneuver: the velocity we want RELATIVE to the player -------------
+    relMx = 0;
+    relMy = 0;
+
+    if (returning) {
+        // head straight back toward the player
+        relMx = MotionDx[huntFrame] * AI_MANEUVER;
+        relMy = MotionDy[huntFrame] * AI_MANEUVER;
+    } else if (AiState == AI_HUNT) {
+        // close to hunt distance, then hold station (pace the player) and fire
+        if (dist > AI_HUNT_DIST) {
+            relMx = MotionDx[huntFrame] * AI_MANEUVER;
+            relMy = MotionDy[huntFrame] * AI_MANEUVER;
+        }
+    } else if (AiState == AI_STRAFE) {
+        // circle: head tangentially. Only nudge in/out once the distance has
+        // drifted outside a dead band around the strafe radius - inside the band
+        // it's pure circling, so a hovering distance can't flip the steering and
+        // make the ship twitch every frame.
+        if (dist > AI_STRAFE_DIST + AI_STRAFE_BAND) {
+            radial = 1;
+        } else if (dist < AI_STRAFE_DIST - AI_STRAFE_BAND) {
+            radial = -1;
+        } else {
+            radial = 0;
+        }
+        tx = AiOrbitDir * (-dy) + radial * (dx / 2);
+        ty = AiOrbitDir * ( dx) + radial * (dy / 2);
+        mFrame = aiHeading(tx, ty);
+        relMx = MotionDx[mFrame] * AI_MANEUVER;
+        relMy = MotionDy[mFrame] * AI_MANEUVER;
+    } else { // AI_FLEE
+        // back away, but only out to flee distance (then just pace the player)
+        if (dist < AI_FLEE_DIST) {
+            mFrame = aiHeading(-dx, -dy);
+            relMx = MotionDx[mFrame] * AI_MANEUVER;
+            relMy = MotionDy[mFrame] * AI_MANEUVER;
+        }
+    }
+
+    // target world velocity = the player's velocity (so we pace it) + the maneuver
+    targetVx = (aiSees ? PlayersXv : 0) + relMx;
+    targetVy = (aiSees ? PlayersYv : 0) + relMy;
+
+    // how far our current velocity is from that target
+    errVx = targetVx - RemotesXv;
+    errVy = targetVy - RemotesYv;
+    errMag = (errVx < 0 ? -errVx : errVx) + (errVy < 0 ? -errVy : errVy);
+
+    // If we need to change velocity, face the correction and thrust toward it. If
+    // our velocity already matches, face the player so we can shoot - that's the
+    // usual case, and is what makes the movement look calm.
+    if (errMag > AI_VEL_TOL) {
+        desiredFrame = aiHeading(errVx, errVy);
+    } else {
+        desiredFrame = huntFrame;
+    }
+
+    // rotate one step the short way toward the desired heading
+    diff = (desiredFrame - RemotesShip.currFrame) & 15;
+
+    if (diff != 0) {
+        if (diff <= 8) {
+            keys += REMOTE_RIGHT;
+        } else {
+            keys += REMOTE_LEFT;
+        }
+    }
+
+    // thrust only to correct the velocity, and only once pointed at the correction
+    if (errMag > AI_VEL_TOL && (diff == 0 || diff == 1 || diff == 15)) {
+        keys += REMOTE_THRUST;
+    }
+
+    // Fire when it can see the player, isn't fleeing, is roughly facing the player
+    // (within one heading step), is in range, off cooldown, and has a shot slot
+    // and the energy to spare. A cloaked player can't be targeted.
+    if (AiFireDelay > 0) {
+        AiFireDelay--;
+    }
+
+    if (aiSees &&
+        AiState != AI_FLEE &&
+        (diffPlayer == 0 || diffPlayer == 1 || diffPlayer == 15) &&
+        dist < AI_FIRE_RANGE &&
+        RemotesEnergy > 100 &&
+        RemotesActiveMissiles < AI_MAX_MISSILES &&
+        AiFireDelay == 0) {
+
+        keys += REMOTE_FIRE;
+
+        // don't turn on the frame we fire: the sim rotates before launching the
+        // missile, so a same-frame turn would swing the shot off the player
+        keys &= ~(REMOTE_LEFT | REMOTE_RIGHT);
+
+        AiFireDelay = AI_FIRE_COOLDOWN + rand() % AI_FIRE_JITTER;
+    }
+
+    // Raise shields only for a player missile that is genuinely bearing down -
+    // close AND moving toward us - so the shielding is a deliberate dodge rather
+    // than a flicker on every shot that drifts past. (And we can afford it, and
+    // aren't cloaked, which the sim treats as exclusive with shields.)
+    if (RemotesCloak == -1 &&
+        RemotesShields == 0 &&
+        RemotesShieldStrength > 0 &&
+        RemotesShieldTime == 0 &&
+        RemotesShieldCooldown == 0) {
+
+        for (m = 0; m < NUM_MISSILES; m++) {
+            if (Missiles[m].state == MISS_ACTIVE &&
+                Missiles[m].type == PLAYER_MISSILE) {
+
+                mdx = Missiles[m].x - RemotesX;
+                mdy = Missiles[m].y - RemotesY;
+
+                // in range, and its velocity points back toward us (the dot
+                // product of the missile's velocity with the missile->remote
+                // vector (-mdx,-mdy) is positive only when it's closing in)
+                if (mdx > -AI_SHIELD_RANGE && mdx < AI_SHIELD_RANGE &&
+                    mdy > -AI_SHIELD_RANGE && mdy < AI_SHIELD_RANGE &&
+                    (Missiles[m].xv * (-mdx) + Missiles[m].yv * (-mdy)) > 0) {
+                    keys += REMOTE_SHIELDS;
+                    break;
+                }
+            }
+        }
+    }
+
+    return keys;
 }
 
 void resetSystem(void) {
@@ -2745,6 +3064,7 @@ void resetSystem(void) {
     PlayersGravity = 0;
     PlayersShields = 0;
     PlayersShieldTime = 0;
+    PlayersShieldCooldown = 0;
     PlayersCloak = -1;
     PlayersHeads = -1;
     PlayersComm = -1;
@@ -2782,6 +3102,7 @@ void resetSystem(void) {
     RemotesGravity = 0;
     RemotesShields = 0;
     RemotesShieldTime  = 0;
+    RemotesShieldCooldown = 0;
     RemotesCloak = -1;
     RemotesHeads = -1;
     RemotesComm = -1;
@@ -2793,6 +3114,15 @@ void resetSystem(void) {
     RemotesActiveMissiles = 0;
     RemotesState = ALIVE;
     RemotesDeathCount = 0;
+
+    // AI state: in solo play give the player a brief moment before the enemy
+    // opens fire. Timer 0 makes it pick a behavior on the first frame.
+    AiFireDelay = AiEnabled ? AI_START_GRACE : 0;
+    AiState = AI_HUNT;
+    AiStateTimer = 0;
+    AiOrbitDir = 1;
+    AiLastX = PlayersX;
+    AiLastY = PlayersY;
 }
 
 void panelFx(void) {
@@ -4194,6 +4524,9 @@ void main(int argc, char** argv) {
                 Linked = 0;
             }
 
+            // back at the menu: clear single-player AI until a mode is chosen
+            AiEnabled = 0;
+
             // user in the setup state
             introControls();
 
@@ -4264,6 +4597,18 @@ void main(int argc, char** argv) {
                                 clearDisplay(0);
 
                                 fontEngine1(DISPLAY_X + 2, DISPLAY_Y + 2, 0, 0, "ENTERING ARENA", VideoBuffer);
+
+                                // single-player: no network link, the remote
+                                // ship is flown by the AI. Roles are fixed so
+                                // the player and AI spawn at opposite corners.
+                                Linked    = 0;
+                                AiEnabled = 1;
+                                Master    = 1;
+                                Slave     = 0;
+
+                                // give the AI the opposite ship type for variety
+                                RemotesShipType = (PlayersShipType == GRYFON_SHIP)
+                                    ? RAPTOR_SHIP : GRYFON_SHIP;
 
                                 // move to running state
                                 GameState = GAME_RUNNING;
@@ -4548,6 +4893,8 @@ void main(int argc, char** argv) {
                 }
             }
         } else if (GameState == GAME_LINKING) {
+            // a real peer is being negotiated - make sure the AI is off
+            AiEnabled = 0;
 #ifdef NET_ENABLED
             // discovery (not the menu) decides who is master: the peer with the
             // higher random nonce wins, so both ends agree regardless of which
@@ -4817,15 +5164,18 @@ void main(int argc, char** argv) {
                         if (KeyboardState[MAKE_ALT] &&
                             !DebounceShields &&
                             PlayersCloak == -1 &&
-                            PlayersShieldStrength > 0) {
+                            PlayersShieldStrength > 0 &&
+                            PlayersShieldTime == 0 &&
+                            PlayersShieldCooldown == 0) {
 
-                            // turn the shields on
+                            // turn the shields on - they now stay up for the full
+                            // SHIELD_ON_TIME and can't be dropped early
                             shieldControl(THE_PLAYER, 1);
 
                             digitalFxPlay(BLZSHLD_VOC, 1);
 
                             // start timer
-                            PlayersShieldTime = 100;
+                            PlayersShieldTime = SHIELD_ON_TIME;
 
                             // add this action to key state
                             playersKeyState += REMOTE_SHIELDS;
@@ -4993,6 +5343,9 @@ void main(int argc, char** argv) {
                     // try and turn off shields
                     if (--PlayersShieldTime <= 0) {
                         shieldControl(THE_PLAYER, 0);
+
+                        // begin the recharge period before shields can return
+                        PlayersShieldCooldown = SHIELD_COOLDOWN_TIME;
                     } else {
                         // which shield colors?
                         if (PlayersShipType == GRYFON_SHIP) {
@@ -5010,6 +5363,11 @@ void main(int argc, char** argv) {
                             writeColorReg(PLAYERS_SHIELD_REG, &PlayersShieldColor);
                         }
                     }
+                }
+
+                // tick the shield recharge while shields are down
+                if (PlayersShieldTime == 0 && PlayersShieldCooldown > 0) {
+                    PlayersShieldCooldown--;
                 }
 
                 // compute players delta
@@ -5031,8 +5389,8 @@ void main(int argc, char** argv) {
                     PlayersY = PlayersY + UNIVERSE_HEIGHT;
                 }
 
-                // only process remote if machines are linked
-                if (Linked) {
+                // process the remote ship if a peer is linked or the AI is flying it
+                if (Linked || AiEnabled) {
                     // move remote
                     RemotesLastX = RemotesX;
                     RemotesLastY = RemotesY;
@@ -5040,8 +5398,12 @@ void main(int argc, char** argv) {
                     // reset remotes input
                     remotesKeyState = 0;
 
-                    // get input from remote machine
-                    remotesKeyState = serialReadWait();
+                    // get input: from the AI in single-player, else from the peer
+                    if (AiEnabled) {
+                        remotesKeyState = computeRemoteAi();
+                    } else {
+                        remotesKeyState = serialReadWait();
+                    }
 
                     // test if a key is depressed
                     if (RemotesState == ALIVE) {
@@ -5117,13 +5479,16 @@ void main(int argc, char** argv) {
                             // instrumentation
                             if (remotesKeyState & REMOTE_SHIELDS &&
                                 RemotesCloak == -1 &&
-                                RemotesShieldStrength > 0) {
+                                RemotesShieldStrength > 0 &&
+                                RemotesShieldTime == 0 &&
+                                RemotesShieldCooldown == 0) {
 
-                                // turn the shields on
+                                // turn the shields on - they stay up for the full
+                                // SHIELD_ON_TIME and can't be dropped early
                                 shieldControl(THE_REMOTE, 1);
 
                                 // start timer
-                                RemotesShieldTime = 100;
+                                RemotesShieldTime = SHIELD_ON_TIME;
                             } else if (remotesKeyState & REMOTE_CLOAK && RemotesEnergy > 0) {
                                 // toggle the cloaking device
                                 RemotesCloak = -RemotesCloak;
@@ -5203,6 +5568,9 @@ void main(int argc, char** argv) {
                         // try and turn off shields
                         if (--RemotesShieldTime <= 0) {
                             shieldControl(THE_REMOTE, 0);
+
+                            // begin the recharge period before shields can return
+                            RemotesShieldCooldown = SHIELD_COOLDOWN_TIME;
                         } else {
                             // which shield colors?
                             if (RemotesShipType == GRYFON_SHIP) {
@@ -5220,6 +5588,11 @@ void main(int argc, char** argv) {
                                 writeColorReg(REMOTES_SHIELD_REG, &RemotesShieldColor);
                             }
                         }
+                    }
+
+                    // tick the shield recharge while shields are down
+                    if (RemotesShieldTime == 0 && RemotesShieldCooldown > 0) {
+                        RemotesShieldCooldown--;
                     }
 
                     // compute remotes delta
@@ -5277,7 +5650,7 @@ void main(int argc, char** argv) {
                 }
 
                 // perform death sequence logic for remote
-                if (Linked && RemotesState == DYING) {
+                if ((Linked || AiEnabled) && RemotesState == DYING) {
                     // decrement death counter
                     if (--RemotesDeathCount <= 0) {
                         // reset remote to starting position
@@ -5349,9 +5722,11 @@ void main(int argc, char** argv) {
 
                         // test if player is trying to engage shields
                         if (PlayersShields) {
-                            // force shields off
+                            // cloaking is exclusive with shields, so it ends the
+                            // shield session - drop them and start the recharge
                             shieldControl(THE_PLAYER, 0);
                             PlayersShieldTime = 0;
+                            PlayersShieldCooldown = SHIELD_COOLDOWN_TIME;
                         }
                     }
                 }
@@ -5387,9 +5762,11 @@ void main(int argc, char** argv) {
 
                         // test if player is trying to engage shields
                         if (RemotesShields) {
-                            // force shields off
+                            // cloaking is exclusive with shields, so it ends the
+                            // shield session - drop them and start the recharge
                             shieldControl(THE_REMOTE, 0);
                             RemotesShieldTime = 0;
+                            RemotesShieldCooldown = SHIELD_COOLDOWN_TIME;
                         }
                     }
                 }
