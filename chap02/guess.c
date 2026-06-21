@@ -11,7 +11,7 @@ void main(void) {
         numTries = 0,   // number of tries
         guess;          // the player's guess
 
-    unsigned int FAR* clock = (unsigned int FAR*)0x0000046CL; // pointer to clock
+    unsigned int far* clock = (unsigned int far*)0x0000046CL; // pointer to clock
 
     // SECTION 1
     // print ouf introductory instructions

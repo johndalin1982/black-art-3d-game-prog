@@ -13,7 +13,7 @@
 
 void delay(int clicks) {
     // this function uses the internal timer to delay a number of clock ticks
-    unsigned long FAR* clock = (unsigned long FAR*)0x0000046CL;
+    unsigned long far* clock = (unsigned long far*)0x0000046CL;
     unsigned long now;
 
     // get current time
