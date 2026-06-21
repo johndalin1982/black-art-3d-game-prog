@@ -718,7 +718,11 @@ char* Instructions[] = {
                "                                   ",
                "TO PLAY THE GAME YOU CAN EITHER    ",
                "PLAY SOLO AGAINST THE COMPUTER OR  ",
+#ifdef NET_ENABLED
+               "OVER A LAN (IPX). IN SOLO MODE AN  ",
+#else
                "MODEM-2-MODEM. IN SOLO MODE AN     ",
+#endif
                "AI-CONTROLLED ENEMY SHIP WILL HUNT ",
                "YOU THROUGH THE ASTEROID BELT. TO  ",
                "PLAY SOLO, PICK YOUR SHIP WITH THE ",
@@ -731,6 +735,24 @@ char* Instructions[] = {
                "                                   ",
                "                                   ",
                "               5                   ",
+#ifdef NET_ENABLED
+               "TO PLAY OVER A LAN, THE GAME USES  ",
+               "IPX - THE SAME PROTOCOL CLASSIC DOS",
+               "GAMES USED. NO PHONE NUMBER, COMM  ",
+               "PORT, OR MODEM SETUP IS NEEDED.    ",
+               "                                   ",
+               "ONE PLAYER PICKS WAIT FOR          ",
+               "CONNECTION; THE OTHER PICKS MAKE   ",
+               "CONNECTION. THE NUMBER PROMPT IS   ",
+               "IGNORED - JUST PRESS ENTER.        ",
+               "                                   ",
+               "THE TWO SHIPS FIND EACH OTHER      ",
+               "AUTOMATICALLY ON THE LAN AND YOU   ",
+               "ARE WARPED INTO BATTLE. THE SELECT ",
+               "COMM PORT OPTION IS NOT USED IN    ",
+               "THIS MODE.                         ",
+               "                                   ",
+#else
                "TO PLAY MODEM-2-MODEM, YOU CAN     ",
                "EITHER DIAL UP A COMPETITOR OR WAIT",
                "FOR A COMPETITOR TO CALL. HOWEVER, ",
@@ -747,6 +769,7 @@ char* Instructions[] = {
                "THE WAIT FOR CONNECTION MENU ITEM. ",
                "ONCE A CONNECTION HAS BEEN MADE YOU",
                "WILL BE WARPED INTO BATTLE.        ",
+#endif
                "               6                   ",
                "CONTROLING THE SHIP                ",
                "                                   ",
