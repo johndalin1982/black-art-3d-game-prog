@@ -135,3 +135,22 @@ void dpmiFreeRealCallback(unsigned short cbSegment, unsigned short cbOffset) {
 
     int386(0x31, &r, &r);
 }
+
+int dpmiMapPhysical(unsigned long phys, unsigned long size, unsigned long* linear) {
+    union REGS r;
+
+    r.x.eax = 0x0800;                             // map physical address
+    r.x.ebx = phys >> 16;                         // BX:CX = physical address
+    r.x.ecx = phys & 0xFFFF;
+    r.x.esi = size >> 16;                         // SI:DI = size in bytes
+    r.x.edi = size & 0xFFFF;
+
+    int386(0x31, &r, &r);
+
+    if (r.x.cflag) {
+        return 0;
+    }
+
+    *linear = ((unsigned long)r.w.bx << 16) | r.w.cx;  // BX:CX = linear address
+    return 1;
+}

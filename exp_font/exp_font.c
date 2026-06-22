@@ -2,63 +2,82 @@
 #include <conio.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <dos.h>
 #include <bios.h>
 #include <fcntl.h>
 
-// ROM character set is at F000:FA6E in BIOS
+// ROM 8x8 character set at F000:FA6E in BIOS
 #define ROM_FONT_ADDRESS    0xF000FA6EL
-#define FONT_SIZE           2048        // 256 characters * 8 bytes each
-#define OUTPUT_FILENAME     "font.bin"
 
-int main(void) {
-    unsigned char far* romCharSet;      // pointer to ROM BIOS character set
-    FILE* outputFile;                   // output file handle
-    int bytesWritten;                   // number of bytes written
-    int index;                          // loop counter
+// all font sizes to export: font.bin (8x8) plus the scaled fontNN.bin
+// variants used by the vesa demos (16=640x480, 24=800x600, 32=1024x768)
+static int Sizes[] = { 8, 16, 24, 32 };
+#define NUM_SIZES (sizeof(Sizes) / sizeof(Sizes[0]))
 
-    // display program header
-    printf("\n");
-    printf("ROM Character Set Extractor\n");
-    printf("===========================\n");
-    printf("\n");
+static int exportFont(unsigned char far* romCharSet, int size) {
+    // write one bit-packed square-cell font file scaled from the 8x8 ROM
+    // glyphs by nearest-neighbour sampling (handles non-integer scales
+    // such as 8 -> 12)
+    FILE* outputFile;
+    int ch, row, col;
+    int bpr, glyph_bytes;
+    unsigned char glyphBuf[4 * 32];     // big enough for the largest size
+    char outputFilename[32];
 
-    // point to the ROM BIOS 8x8 character set
-    romCharSet = (unsigned char far*)ROM_FONT_ADDRESS;
+    bpr         = (size + 7) / 8;       // bytes per row (bit-packed)
+    glyph_bytes = bpr * size;
 
-    printf("Reading ROM font from F000:FA6E...\n");
+    // size 8 writes font.bin (the original); others write fontNN.bin
+    if (size == 8)
+        strcpy(outputFilename, "font.bin");
+    else
+        sprintf(outputFilename, "font%d.bin", size);
 
-    // open output file for binary writing
-    if ((outputFile = fopen(OUTPUT_FILENAME, "wb")) == NULL) {
-        printf("Error: Could not create %s\n", OUTPUT_FILENAME);
-        return 1;
+    outputFile = fopen(outputFilename, "wb");
+    if (!outputFile) {
+        printf("Error: Could not create %s\n", outputFilename);
+        return 0;
     }
 
-    printf("Writing font data to %s...\n", OUTPUT_FILENAME);
+    for (ch = 0; ch < 256; ch++) {
+        const unsigned char far* src = romCharSet + ch * 8;
+        memset(glyphBuf, 0, glyph_bytes);
 
-    // write the entire 2KB font to the file
-    bytesWritten = 0;
-    for (index = 0; index < FONT_SIZE; index++) {
-        if (fputc(romCharSet[index], outputFile) == EOF) {
-            printf("Error: Failed to write byte %d\n", index);
-            fclose(outputFile);
-            return 1;
+        for (row = 0; row < size; row++) {
+            unsigned char srcByte = src[row * 8 / size];
+            for (col = 0; col < size; col++) {
+                if (srcByte & (0x80 >> (col * 8 / size))) {
+                    glyphBuf[row * bpr + col / 8] |= (0x80 >> (col % 8));
+                }
+            }
         }
-        bytesWritten++;
+        fwrite(glyphBuf, 1, glyph_bytes, outputFile);
     }
 
-    // close the file
     fclose(outputFile);
 
-    // display success message
-    printf("\n");
-    printf("Success!\n");
-    printf("--------\n");
-    printf("Extracted %d bytes from ROM BIOS\n", bytesWritten);
-    printf("Font data saved to: %s\n", OUTPUT_FILENAME);
-    printf("\n");
-    printf("You can now use this file with your DOS4GW 32-bit programs.\n");
-    printf("\n");
+    printf("  %-12s %2dx%-2d  %6d bytes\n",
+           outputFilename, size, size, 256 * glyph_bytes);
+    return 1;
+}
 
+int main(void) {
+    unsigned char far* romCharSet;
+    int index;
+
+    printf("\nROM Character Set Extractor\n");
+    printf("===========================\n\n");
+
+    romCharSet = (unsigned char far*)ROM_FONT_ADDRESS;
+    printf("Reading ROM font from F000:FA6E...\n\n");
+
+    for (index = 0; index < NUM_SIZES; index++) {
+        if (!exportFont(romCharSet, Sizes[index])) {
+            return 1;
+        }
+    }
+
+    printf("\nDone.\n\n");
     return 0;
 }

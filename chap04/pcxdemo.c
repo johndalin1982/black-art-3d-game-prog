@@ -18,8 +18,13 @@
 PcxPicture ImagePcx;     // general PCX image used to load background and imagery
 
 void main(int argc, char** argv) {
+#ifdef VBE_SUPPORT
+    // set the graphics mode to SVGA 640x480x256
+    setGraphicsModeVesa(640, 480, 8);
+#else
     // set the graphics mode to mode 13h
     setGraphicsMode(GRAPHICS_MODE13);
+#endif
 
     // load the screen image
     pcxInit(&ImagePcx);

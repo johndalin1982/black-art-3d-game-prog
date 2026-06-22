@@ -2243,7 +2243,7 @@ void fontEngine1(int x, int y,
             TechFont[index].y = 1 + (index / 16) * (TECH_FONT_HEIGHT + 1);
 
             bitmapGet((BitmapPtr)&TechFont[index],
-                      (unsigned char FAR*)ImagePcx.buffer);
+                      (PcxPicturePtr)&ImagePcx);
         }
 
         // font is loaded, delete pcx file and set flag
@@ -3215,11 +3215,12 @@ void main(int argc, char** argv) {
     // seed the random number generator with time
     srand((unsigned int)timerQuery());
 
+    // initialize font engine
+    fontEngine1(0, 0, 0, 0, NULL, NULL);
+
     techPrint(START_MESS_X, START_MESS_Y, " KILL OR BE KILLED 1.0 STARTING UP...", VideoBuffer);
     timeDelay(5);
 
-    // initialize font engine
-    fontEngine1(0, 0, 0, 0, NULL, NULL);
     techPrint(START_MESS_X, START_MESS_Y + 16, " LANGUAGE TRANSLATION ENABLED", VideoBuffer);
 
     // create the double buffer

@@ -4,7 +4,6 @@
 #include <stdlib.h>
 #include <conio.h>
 #include <math.h>
-#include <graph.h>
 
 #include "black3.h"
 
@@ -34,32 +33,61 @@ void drawGameGrid(void) {
     int whiteColor = 15;
 
     // draw the vertical lines
+#ifdef VBE_SUPPORT
+    for (x = 0; x < 640; x += 40) {
+        // position the pen and draw the line
+        lineV(0, 479, x, whiteColor);
+        //_moveto(x, 0);
+        //_lineto(x, 479);
+    }
+#else
     for (x = 0; x < 320; x += 20) {
         // position the pen and draw the line
         lineV(0, 199, x, whiteColor);
         //_moveto(x, 0);
         //_lineto(x, 199);
     }
+#endif
 
     // draw the horizontal lines
+#ifdef VBE_SUPPORT
+    for (y = 0; y < 480; y += 40) {
+        // position the pen and draw the line
+        lineH(0, 639, y, whiteColor);
+        //_moveto(0, y);
+        //_lineto(639, y);
+    }
+#else
     for (y = 0; y < 200; y += 20) {
         // position the pen and draw the line
         lineH(0, 319, y, whiteColor);
         //_moveto(0, y);
         //_lineto(319, y);
     }
+#endif
 }
 
 void main(void) {
     int done = 0,       // main event loop exit flag
+#ifdef VBE_SUPPORT
+        playerX = 320,  // starting position and direction of player
+        playerY = 360,
+#else
         playerX = 160,  // starting position and direction of player
         playerY = 150,
+#endif
         playerDirection = NORTH;
 
     // SECTION 1
+#ifdef VBE_SUPPORT
+    // set the graphics mode to SVGA 640x480x256
+    //_setvideomode(_MRES256COLOR);
+    setGraphicsModeVesa(640, 480, 8);
+#else
     // set the graphics mode to mode 13h 320x200x256
     //_setvideomode(_MRES256COLOR);
     setGraphicsMode(GRAPHICS_MODE13);
+#endif
 
     // draw the game grid
     drawGameGrid();
@@ -111,36 +139,60 @@ void main(void) {
         switch (playerDirection) {
             case NORTH:
             {
+#ifdef VBE_SUPPORT
+                if (--playerY < 0) {
+                    playerY = 479;
+                }
+#else
                 if (--playerY < 0) {
                     playerY = 199;
                 }
+#endif
 
                 break;
             }
 
             case SOUTH:
             {
+#ifdef VBE_SUPPORT
+                if (++playerY > 479) {
+                    playerY = 0;
+                }
+#else
                 if (++playerY > 199) {
                     playerY = 0;
                 }
+#endif
 
                 break;
             }
 
             case EAST:
             {
+#ifdef VBE_SUPPORT
+                if (++playerX > 639) {
+                    playerX = 0;
+                }
+#else
                 if (++playerX > 319) {
                     playerX = 0;
                 }
+#endif
 
                 break;
             }
 
             case WEST:
             {
+#ifdef VBE_SUPPORT
+                if (--playerX < 0) {
+                    playerX = 639;
+                }
+#else
                 if (--playerX < 0) {
                     playerX = 319;
                 }
+#endif
 
                 break;
             }

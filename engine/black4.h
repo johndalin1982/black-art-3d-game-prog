@@ -25,6 +25,7 @@
 extern unsigned char FAR* RomCharSet;
 extern unsigned char FAR* DoubleBuffer;
 extern unsigned int DoubleBufferSize;   // total size of buffer in bytes
+extern unsigned int DoubleBufferHeight; // row count of the buffer createDoubleBuffer last sized
 
 // this is the typedef for a bitmap
 typedef struct BitmapType {
@@ -63,6 +64,15 @@ typedef struct PcxPictureType {
     PcxHeader header;           // the header of the PCX file
     RgbColor palette[256];      // the palette data
     unsigned char FAR* buffer;  // holding the decompressed image
+#ifdef VBE_SUPPORT
+    int bpp;                    // this file's own depth: 8 (indexed) or 32
+                                // (true colour, RGB widened on load) - checked
+                                // against the runtime DisplayBpp before use.
+                                // 24-bit true-colour PCX support is VESA-only
+                                // (mode-13h is always 8bpp indexed, matching
+                                // the book), hence this field only exists
+                                // here too.
+#endif
 } PcxPicture, *PcxPicturePtr;
 #pragma pack(pop)  // Restore default packing
 
@@ -77,6 +87,18 @@ typedef struct SpriteType {
     int threshold2;
     int threshold3;
     unsigned char FAR* frames[MAX_SPRITE_FRAMES];   // array of pointers to the images
+#ifdef VBE_SUPPORT
+    // tinted sprites (spriteDrawTinted/pcxGetSpriteTinted) have no
+    // book-original equivalent - VESA-only, same reasoning as PcxPicture.bpp
+    unsigned char FAR* tintMask[MAX_SPRITE_FRAMES]; // optional, one byte/pixel: 0 means
+                                    // the frame's own pixel; N (1-based) means
+                                    // substitute tint region N's live color at
+                                    // draw time (0 = unused, the default)
+    unsigned long transparentColor; // native-format value a transparent draw
+                                    // skips (0 by default - "index 0 is
+                                    // transparent", matching the book's own
+                                    // hardcoded convention)
+#endif
     int currFrame;                  // current frame being displayed
     int numFrames;                  // total number of frames
     int state;                      // state of sprite, alive, dead...
@@ -111,7 +133,7 @@ void fillDoubleBuffer(int color);
 void displayDoubleBuffer(unsigned char FAR* buffer, int y);
 void deleteDoubleBuffer(void);
 void bitmapPut(BitmapPtr image, unsigned char FAR* destination, int transparent);
-void bitmapGet(BitmapPtr image, unsigned char FAR* source);
+void bitmapGet(BitmapPtr image, PcxPicturePtr source);
 int bitmapAllocate(BitmapPtr image, int width, int height);
 void bitmapDelete(BitmapPtr image);
 int pcxInit(PcxPicturePtr image);
@@ -136,6 +158,25 @@ void spriteErase(SpritePtr sprite, unsigned char FAR* buffer);
 void spriteDrawClip(SpritePtr sprite, unsigned char FAR* buffer, int transparent);
 void spriteUnderClip(SpritePtr sprite, unsigned char FAR* buffer);
 void spriteEraseClip(SpritePtr sprite, unsigned char FAR* buffer);
+#ifdef VBE_SUPPORT
+// Like spriteDrawClip, but a pixel marked region N (1-based) in
+// sprite->tintMask[currFrame] (see pcxGetSpriteTinted) draws as
+// tintColors[N-1] instead of its own stored pixel. Always clips - no
+// unclamped fast-path sibling, unlike spriteDraw/spriteDrawClip. No
+// book-original equivalent - VESA-only, see Sprite.tintMask above.
+void spriteDrawTinted(SpritePtr sprite, unsigned char FAR* buffer, int transparent,
+                     const unsigned long* tintColors, int numTintColors);
+// Like pcxGetSprite, but also marks tinted pixels: a source pixel equal to
+// tintKeys[i] is recorded in sprite->tintMask[spriteFrame] (allocated here)
+// as region (i+1) instead of being copied into the frame verbatim, so
+// spriteDrawTinted can substitute a live color for it at draw time.
+void pcxGetSpriteTinted(
+    PcxPicturePtr image,
+    SpritePtr sprite,
+    int spriteFrame,
+    int cellX, int cellY,
+    const unsigned long* tintKeys, int numTintKeys);
+#endif
 void pcxCopyToBuffer(PcxPicturePtr image, unsigned char FAR* buffer);
 void fwordcpy(void FAR* destination, void FAR* source, int numWords);
 int layerCreate(LayerPtr destLayer, int width, int height);

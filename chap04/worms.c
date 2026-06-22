@@ -21,6 +21,15 @@ Sprite WormSprite, AntSprite;       // the worm and ant
 void main(int argc, char** argv) {
     int index;  // loop variable
 
+#ifdef VBE_SUPPORT
+    // set the graphics mode to SVGA 640x480x256
+    setGraphicsModeVesa(640, 480, 8);
+
+    // create the double buffer
+    if (!createDoubleBuffer(480)) {
+        return;
+    }
+#else
     // set the graphics mode to mode 13h
     setGraphicsMode(GRAPHICS_MODE13);
 
@@ -28,13 +37,18 @@ void main(int argc, char** argv) {
     if (!createDoubleBuffer(200)) {
         return;
     }
+#endif
 
     // load the imagery for worm
     pcxInit(&ImagePcx);
     pcxLoad("wormimg.pcx", &ImagePcx, 1);
 
     // initialize the worm sprite
+#ifdef VBE_SUPPORT
+    spriteInit(&WormSprite, 320, 200, 76, 40, 0, 0, 0, 0, 0, 0);
+#else
     spriteInit(&WormSprite, 160, 100, 38, 20, 0, 0, 0, 0, 0, 0);
+#endif
 
     // extract the bitmaps for the worm, there are 4 animation cells
     for (index = 0; index < 4; index++) {
@@ -49,7 +63,11 @@ void main(int argc, char** argv) {
     pcxLoad("antimg.pcx", &ImagePcx, 1);
 
     // initialize the ant sprite
+#ifdef VBE_SUPPORT
+    spriteInit(&AntSprite, 320, 360, 24, 12, 0, 0, 0, 0, 0, 0);
+#else
     spriteInit(&AntSprite, 160, 180, 12, 6, 0, 0, 0, 0, 0, 0);
+#endif
 
     // extract the bitmaps for the ant, there are 3 animation cells
     for (index = 0; index < 3; index++) {
@@ -82,6 +100,15 @@ void main(int argc, char** argv) {
         spriteEraseClip(&WormSprite, DoubleBuffer);
 
         // move objects, test if they have run off right edge of screen
+#ifdef VBE_SUPPORT
+        if ((AntSprite.x += 2) > 640 - 24) {
+            AntSprite.x = 0;
+        }
+
+        if ((WormSprite.x += 12) > 640) {
+            WormSprite.x = -80;   // start worm back one length beyond the left edge of screen
+        }
+#else
         if ((AntSprite.x += 1) > 320 - 12) {
             AntSprite.x = 0;
         }
@@ -89,6 +116,7 @@ void main(int argc, char** argv) {
         if ((WormSprite.x += 6) > 320) {
             WormSprite.x = -40;   // start worm back one length beyond the left edge of screen
         }
+#endif
 
         // do animation for objects
         if (++AntSprite.currFrame == 3) {

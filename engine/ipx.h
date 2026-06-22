@@ -11,15 +11,14 @@
 // path could never do), and over a real IPX LAN. For internet play, relay with
 // ipxbox (github.com/fragglet/ipxbox).
 //
-// The API below is what the StarBlazer serial-link shim (chap09/blazer.c,
-// NET_ENABLED) calls: a transport pair (netSendToPeer/netRecv/netPoll) plus
+// The API below is a transport pair (netSendToPeer/netRecv/netPoll) plus
 // zero-config BROADCAST DISCOVERY for pairing — netHost() vs netJoin(), no IP
 // to type.
 //
-// 16-bit real mode only. The IPX entry point is reached by a real-mode FAR CALL
-// (obtained via INT 2Fh/AX=7A00h); calling it from 32-bit protected mode would
-// require a DPMI 0301h real-mode-procedure bridge (not implemented). Compiling
-// this file for 32-bit yields no-op stubs (netInit returns 0 -> "no network").
+// 16-bit real mode and 32-bit DOS/4GW. The IPX entry point is reached by a
+// real-mode FAR CALL (obtained via INT 2Fh/AX=7A00h); 32-bit builds reach the
+// same entry through the DPMI bridge (INT 31h 0300h to fetch it, 0301h to
+// far-call it), with ECBs/buffers in DOS conventional memory.
 
 // ---- Tunables (compile-time) ----
 #define NET_MAX_PACKET_BYTES    256     // payload limit per game packet

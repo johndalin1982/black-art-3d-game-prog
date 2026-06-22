@@ -82,4 +82,11 @@ int dpmiAllocRealCallback(
 // (DPMI INT 31h func 0304h).
 void dpmiFreeRealCallback(unsigned short cbSegment, unsigned short cbOffset);
 
+// Map a physical address range into the flat address space (DPMI INT 31h func
+// 0800h). Used to reach a VBE 2.0 linear framebuffer, whose physical address
+// sits above the 1 MB line and so isn't otherwise addressable. On success
+// *linear receives a linear address usable as a flat pointer under DOS/4GW.
+// Returns 1 on success, 0 on DPMI host error (e.g. host without 0800h support).
+int dpmiMapPhysical(unsigned long phys, unsigned long size, unsigned long* linear);
+
 #endif

@@ -12,6 +12,10 @@
 
 #include "black3.h"   // the header file for this module
 
+#ifdef VBE_SUPPORT
+#include "dpmi.h"
+#endif
+
 #define COLOR_MASK          0x3C6   // the bit mask register
 #define COLOR_REGISTER_RD   0x3C7   // set read index at this I/O
 #define COLOR_REGISTER_WR   0x3C8   // set write index at this I/O
@@ -65,6 +69,37 @@ unsigned char FAR* RomCharSet = (unsigned char FAR*)0xF000FA6EL;
 unsigned char FAR* VideoBuffer = (unsigned char FAR*)0xA0000000L;
 #endif
 
+#ifdef VBE_SUPPORT
+// single source of truth for the CURRENT mode's geometry, kept up to date by
+// setGraphicsMode/setGraphicsModeVesa; every drawing function reads these
+// instead of assuming mode-13h's fixed 320x200x8
+int DisplayPitch  = MODE13_WIDTH;
+int DisplayWidth  = MODE13_WIDTH;
+int DisplayHeight = MODE13_HEIGHT;
+int DisplayBpp    = 8;
+int DisplayBppShift = 0;
+int DisplayPitchShift1 = 8;   // 320 = (1<<8) + (1<<6), matching MODE13_WIDTH default above
+int DisplayPitchShift2 = 6;
+#endif
+
+#ifdef VBE_SUPPORT
+// size of the CURRENTLY LOADED font's glyph cell, kept up to date by
+// loadFontSet; printChar/printString (and their *Db counterparts in
+// black4.c) read these instead of assuming 8x8
+int GlyphWidth  = ROM_CHAR_WIDTH;
+int GlyphHeight = ROM_CHAR_HEIGHT;
+
+// defined in black4.c - a mode change has to keep this in sync too (see
+// setGraphicsMode/setGraphicsModeVesa below). Callers that never call
+// createDoubleBuffer() (pcxCopyToBuffer/displayDoubleBuffer straight into
+// VideoBuffer, and every sprite function's Y-clip check) all read this as
+// "how tall is the thing I'm currently drawing into" - without this sync it
+// stays frozen at its SCREEN_HEIGHT (200) static initializer even after a
+// setGraphicsModeVesa to a taller mode, silently truncating anything that
+// relies on the default.
+extern unsigned int DoubleBufferHeight;
+#endif
+
 void timeDelay(int clicks) {
     // this function uses the internal timer to delay a number of clock ticks
 #ifdef DOS_32_BIT
@@ -95,11 +130,228 @@ void setGraphicsMode(int mode) {
 #else
     int86(0x10, &inregs, &outregs);
 #endif
+
+#ifdef VBE_SUPPORT
+    if (mode == GRAPHICS_MODE13) {
+        DisplayPitch  = MODE13_WIDTH;
+        DisplayWidth  = MODE13_WIDTH;
+        DisplayHeight = MODE13_HEIGHT;
+        DisplayBpp    = 8;
+        DisplayBppShift = 0;
+        // fixed physical VGA pitch, no VBE renegotiation available - use its
+        // own two-shift decomposition (320 = 256+64) instead
+        DisplayPitchShift1 = 8;
+        DisplayPitchShift2 = 6;
+        DoubleBufferHeight = MODE13_HEIGHT;
+    }
+#endif
 }
+
+#ifdef VBE_SUPPORT
+
+// ---- VBE VbeInfoBlock / ModeInfoBlock field offsets (VESA VBE spec) --------
+#define VIB_VIDEO_MODE_PTR    14    // dword far ptr to the mode-number list
+#define MIB_ATTRIBUTES         0    // word, mode attributes
+#define MIB_BYTES_PER_LINE    16    // word, bytes per scan line
+#define MIB_XRES               18    // word, horizontal resolution
+#define MIB_YRES              20    // word, vertical resolution
+#define MIB_BPP               25    // byte, bits per pixel
+#define MIB_PHYS_BASE_PTR     40    // dword, linear framebuffer phys addr (VBE 2.0+)
+
+// Find a VBE mode for width x height x targetBpp with a linear framebuffer,
+// filling *pitch and *physBase; returns the mode number or -1. Scans the
+// card's own mode list (4F00h -> VideoModePtr), so any resolution the
+// hardware exposes works.
+static int vesaFindMode(int width, int height, int targetBpp, int* pitch, unsigned long* physBase) {
+    DpmiRealModeRegs regs;
+    unsigned short   mibSeg, mibSel, vbeSeg, vbeSel, modeSeg, modeOff;
+    unsigned char*   mib;
+    unsigned char*   vbe;
+    unsigned char*   modeList;
+    int              i, result = -1;
+
+    // A 256-byte ModeInfoBlock in DOS memory the real-mode BIOS can fill in.
+    if (!dpmiAllocDos(16, &mibSeg, &mibSel)) {
+        return -1;
+    }
+    mib = (unsigned char*)((unsigned long)mibSeg << 4);
+
+    // Enumerate the card's mode list: 4F00h -> VbeInfoBlock.VideoModePtr.
+    if (!dpmiAllocDos(32, &vbeSeg, &vbeSel)) {          // 512-byte VbeInfoBlock
+        dpmiFreeDos(mibSel);
+        return -1;
+    }
+    vbe = (unsigned char*)((unsigned long)vbeSeg << 4);
+    vbe[0] = 'V'; vbe[1] = 'B'; vbe[2] = 'E'; vbe[3] = '2';   // ask for VBE 2.0 info
+
+    memset(&regs, 0, sizeof(regs));
+    regs.eax = 0x4F00;                                 // get controller info
+    regs.es  = vbeSeg;
+    regs.edi = 0;
+    if (!dpmiRealModeInt(0x10, &regs) && (regs.eax & 0xFFFF) == 0x004F) {
+        // VideoModePtr is a real-mode seg:off far pointer to a 0xFFFF-terminated
+        // list of mode numbers; its flat address is reachable in the DOS/4GW map.
+        modeOff  = vbe[VIB_VIDEO_MODE_PTR]     | (vbe[VIB_VIDEO_MODE_PTR + 1] << 8);
+        modeSeg  = vbe[VIB_VIDEO_MODE_PTR + 2] | (vbe[VIB_VIDEO_MODE_PTR + 3] << 8);
+        modeList = (unsigned char*)(((unsigned long)modeSeg << 4) + modeOff);
+
+        for (i = 0; ; i += 2) {
+            int candidate = modeList[i] | (modeList[i + 1] << 8);
+            int attr, xres, yres, bpp;
+
+            if (candidate == 0xFFFF) {
+                break;                                 // end of the list
+            }
+            memset(&regs, 0, sizeof(regs));
+            regs.eax = 0x4F01;
+            regs.ecx = (unsigned)candidate;
+            regs.es  = mibSeg;
+            regs.edi = 0;
+            if (dpmiRealModeInt(0x10, &regs) || (regs.eax & 0xFFFF) != 0x004F) {
+                continue;
+            }
+            attr = mib[MIB_ATTRIBUTES] | (mib[MIB_ATTRIBUTES + 1] << 8);
+            xres = mib[MIB_XRES]       | (mib[MIB_XRES + 1] << 8);
+            yres = mib[MIB_YRES]       | (mib[MIB_YRES + 1] << 8);
+            bpp  = mib[MIB_BPP];
+
+            // supported (bit 0) + graphics (bit 4) + linear framebuffer (bit 7)
+            if ((attr & 0x91) == 0x91 && bpp == targetBpp && xres == width && yres == height) {
+                *pitch    = mib[MIB_BYTES_PER_LINE] | (mib[MIB_BYTES_PER_LINE + 1] << 8);
+                *physBase =  (unsigned long)mib[MIB_PHYS_BASE_PTR]
+                          | ((unsigned long)mib[MIB_PHYS_BASE_PTR + 1] << 8)
+                          | ((unsigned long)mib[MIB_PHYS_BASE_PTR + 2] << 16)
+                          | ((unsigned long)mib[MIB_PHYS_BASE_PTR + 3] << 24);
+                result = candidate;
+                break;
+            }
+        }
+    }
+
+    dpmiFreeDos(vbeSel);
+    dpmiFreeDos(mibSel);
+    return result;
+}
+
+int setGraphicsModeVesa(int width, int height, int bpp) {
+    DpmiRealModeRegs regs;
+    unsigned long    physBase, linear;
+    int              mode, pitch;
+
+    mode = vesaFindMode(width, height, bpp, &pitch, &physBase);
+    if (mode < 0 || physBase == 0) {
+        return 0;
+    }
+
+    // INT 10h 4F02h - set the mode with the linear-framebuffer bit (0x4000).
+    memset(&regs, 0, sizeof(regs));
+    regs.eax = 0x4F02;
+    regs.ebx = (unsigned)mode | 0x4000;
+    if (dpmiRealModeInt(0x10, &regs) || (regs.eax & 0xFFFF) != 0x004F) {
+        return 0;
+    }
+
+    // Widen the hardware's logical scan line length to the next power of
+    // two (INT 10h 4F06h/BL=02h, VBE 2.0's "Set Logical Scan Line Length in
+    // Bytes") so DisplayPitch itself becomes a single power of two - lets
+    // every "y * DisplayPitch" in the engine become "y << shift" instead of
+    // a runtime multiply (see PITCH_OFFSET in black3.h), the same way
+    // DisplayBppShift covers the x-offset half of the same address
+    // computation. This reconfigures the ACTUAL hardware stride (not just
+    // our own bookkeeping), so addressing stays correct - it costs extra
+    // VRAM for widths that weren't already a power of two (e.g. 800x600x32:
+    // 3200 bytes/row padded to 4096, +28%). Requests the smallest power of
+    // two that still fits the visible width; fails the mode outright if the
+    // card/VRAM can't support even that (same as any other unsupported
+    // width/height/bpp combination above).
+    {
+        unsigned long minPitch = (unsigned long)width * (bpp / 8);
+        unsigned long tryPitch = 1;
+
+        while (tryPitch < minPitch) {
+            tryPitch <<= 1;
+        }
+
+        memset(&regs, 0, sizeof(regs));
+        regs.eax = 0x4F06;
+        regs.ebx = 0x0002;
+        regs.ecx = tryPitch;
+        if (dpmiRealModeInt(0x10, &regs) || (regs.eax & 0xFFFF) != 0x004F
+            || (regs.ebx & 0xFFFF) != tryPitch) {
+            return 0;
+        }
+        pitch = (int)tryPitch;
+    }
+
+    // Try to map two pages so page-flip demos can use a second page; a
+    // high-res 32bpp mode may exceed the card's VRAM when doubled, so fall
+    // back to one page so the mode still works.
+    if (!dpmiMapPhysical(physBase, (unsigned long)pitch * height * 2, &linear)) {
+        if (!dpmiMapPhysical(physBase, (unsigned long)pitch * height, &linear)) {
+            return 0;
+        }
+    }
+    VideoBuffer  = (unsigned char*)linear;
+    DisplayWidth  = width;
+    DisplayHeight = height;
+    DisplayPitch  = pitch;
+    DisplayBpp    = bpp;
+    DisplayBppShift = (bpp == 8) ? 0 : (bpp == 16) ? 1 : 2;   // 32bpp
+    DoubleBufferHeight = height;
+
+    // pitch is guaranteed a single power of two by the 4F06h negotiation
+    // above, so no second shift term is needed (contrast GRAPHICS_MODE13's
+    // fixed 320, which needs both - see black3.h's PITCH_OFFSET).
+    {
+        int shift = 0;
+        unsigned long v = (unsigned long)pitch;
+        while (v > 1) {
+            v >>= 1;
+            shift++;
+        }
+        DisplayPitchShift1 = shift;
+        DisplayPitchShift2 = -1;
+    }
+    return 1;
+}
+
+#endif
 
 void fillScreen(int color) {
     // this function will fill the entire screen with the sent color
     // use the inline assembler for speed
+#ifdef VBE_SUPPORT
+    {
+        unsigned long bytes = PITCH_OFFSET(DisplayHeight);
+        unsigned dwords, rem;
+
+        switch (DisplayBpp) {
+            case 8: {
+                unsigned long fill = (unsigned char)color;
+                fill |= fill << 8;
+                fill |= fill << 16;
+                dwords = (unsigned)(bytes >> 2);
+                rem    = (unsigned)(bytes & 3);
+                asmStosDwordsBytes(VideoBuffer, fill, dwords, rem);
+                break;
+            }
+            case 16: {
+                unsigned long c    = (unsigned short)color;
+                unsigned long fill = c | (c << 16);
+                dwords = (unsigned)(bytes >> 2);
+                rem    = (unsigned)(bytes & 3);
+                asmStosDwordsWords(VideoBuffer, fill, dwords, rem);
+                break;
+            }
+            default: {   // 32
+                dwords = (unsigned)(bytes >> 2);
+                asmStosDwords(VideoBuffer, (unsigned long)color, dwords);
+                break;
+            }
+        }
+    }
+#else
+    // mode-13h only, no VBE_SUPPORT: fixed 320x200 fill
 #ifdef DOS_32_BIT
     _asm {
         mov edi, VideoBuffer        ; load flat pointer into EDI
@@ -120,25 +372,87 @@ void fillScreen(int color) {
         rep stosw               ; move the color into the video buffer really fast!
     }
 #endif
+#endif
 }
 
 void writePixel(int x, int y, int color) {
+#ifdef VBE_SUPPORT
+    // plots the pixel at (x,y) in the current mode, whatever it is
+    unsigned char FAR* p = VideoBuffer + PITCH_OFFSET(y) + ((unsigned long)x << DisplayBppShift);
+
+    switch (DisplayBpp) {
+        case 8:  *p = (unsigned char)color; break;
+        case 16: *(unsigned short FAR*)p = (unsigned short)color; break;
+        default: *(unsigned long FAR*)p  = (unsigned long)color; break;   // 32
+    }
+#else
     // plots the pixel in the desired color a little quicker using binary shifting
     // to accomplish the multiplications
     // use the fact that 320*y = 256*y + 64*y = y<<8 + y<<6
     VideoBuffer[((y << 8) + (y << 6)) + x] = (unsigned char)color;
+#endif
 }
 
 int readPixel(int x, int y) {
+#ifdef VBE_SUPPORT
+    // this function reads a pixel from the screen buffer in the current mode
+    unsigned char FAR* p = VideoBuffer + PITCH_OFFSET(y) + ((unsigned long)x << DisplayBppShift);
+
+    switch (DisplayBpp) {
+        case 8:  return (int)(*p);
+        case 16: return (int)(*(unsigned short FAR*)p);
+        default: return (int)(*(unsigned long FAR*)p);   // 32
+    }
+#else
     // this function reads a pixel from the screen buffer
     // use the fact that 320*y = 256*y + 64*y = y<<8 + y <<6
     return (int)VideoBuffer[((y << 8) + (y << 6)) + x];
+#endif
 }
 
 void lineH(int x1, int x2, int y, int color) {
-    // draw a horizontal line using the memset function
-    // this function does not do clipping hence x1,x2 and y must all be within
-    // the bounds of the screen
+    // draw a horizontal line; this function does not do clipping hence
+    // x1,x2 and y must all be within the bounds of the current mode
+#ifdef VBE_SUPPORT
+    unsigned char FAR* p;
+    int temp, len;   // temp: endpoint-swap storage; len: pixel count
+
+    // sort x1 and x2, so that x2 > x1
+    if (x1 > x2) {
+        temp = x1;
+        x1 = x2;
+        x2 = temp;
+    }
+    len = x2 - x1 + 1;
+    p = VideoBuffer + PITCH_OFFSET(y) + ((unsigned long)x1 << DisplayBppShift);
+
+    switch (DisplayBpp) {
+        case 8:
+            // one byte per pixel: the book's own MEMSET approach, generalized
+            // to the current pitch instead of a hardcoded 320
+            MEMSET((char FAR*)p, (unsigned char)color, len);
+            break;
+        case 16: {
+            // align to a DWORD boundary, then fill 2 pixels at once with rep stosd
+            unsigned short c    = (unsigned short)color;
+            unsigned long  fill = c | ((unsigned long)c << 16);
+            unsigned       dwords, rem;
+            if (((unsigned long)p & 2) && len > 0) {
+                *(unsigned short*)p = c;      // plot one leading pixel to align
+                p += 2;
+                len--;
+            }
+            dwords = (unsigned)len >> 1;      // 2 pixels per DWORD
+            rem    = (unsigned)len & 1;
+            asmStosDwordsWords(p, fill, dwords, rem);
+            break;
+        }
+        default:   // 32 - one pixel per stosd
+            asmStosDwords(p, (unsigned long)color, (unsigned)len);
+            break;
+    }
+#else
+    // mode-13h only, no VBE_SUPPORT: the book's original fixed addressing
     int temp;   // used for temporary storage during endpoint swap
 
     // sort x1 and x2, so that x2 > x1
@@ -150,12 +464,45 @@ void lineH(int x1, int x2, int y, int color) {
 
     // draw the row of pixels
     MEMSET((char FAR*)(VideoBuffer + ((y << 8) + (y << 6)) + x1), (unsigned char) color, x2 - x1 + 1);
+#endif
 }
 
 void lineV(int y1, int y2, int x, int color) {
-    // draw a vertical line, note that a memset function can no longer be
-    // used since the pixel addresses are no longer contiguous in memory
+#ifdef VBE_SUPPORT
+    // draw a vertical line; pixel addresses are not contiguous in memory,
+    // so this writes one pixel per row instead of using MEMSET
     // note that the end points of the line must be on the screen
+    unsigned char FAR* p;  // current row's pixel
+    int temp,   // used for temporary storage during swap
+        y,      // loop index
+        pitch;  // bytes per row of the current mode
+
+    // make sure y2 > y1
+    if (y1 > y2) {
+        temp = y1;
+        y1 = y2;
+        y2 = temp;
+    }
+
+    pitch = DisplayPitch;
+    p = VideoBuffer + PITCH_OFFSET(y1) + ((unsigned long)x << DisplayBppShift);
+
+    switch (DisplayBpp) {
+        case 8:
+            for (y = y1; y <= y2; y++) { *p = (unsigned char)color; p += pitch; }
+            break;
+        case 16:
+            for (y = y1; y <= y2; y++) { *(unsigned short FAR*)p = (unsigned short)color; p += pitch; }
+            break;
+        default:   // 32
+            for (y = y1; y <= y2; y++) { *(unsigned long FAR*)p = (unsigned long)color; p += pitch; }
+            break;
+    }
+#else
+    // mode-13h only, no VBE_SUPPORT: draw a vertical line, note that a
+    // memset function can no longer be used since the pixel addresses are
+    // no longer contiguous in memory; note that the end points of the line
+    // must be on the screen
     unsigned char FAR* startOffset; // starting memory offset of line
     int index,  // loop index
         temp,   // used for temporary storage during swap
@@ -181,6 +528,7 @@ void lineV(int y1, int y2, int x, int color) {
         // move downward to next line
         startOffset += 320;
     }
+#endif
 }
 
 void drawRectangle(int x1, int y1, int x2, int y2, int color) {
@@ -188,6 +536,16 @@ void drawRectangle(int x1, int y1, int x2, int y2, int color) {
     // it is assumed that each endpoint is within the screen boundaries
     // and (x1,y1) is the upper left hand corner and (x2,y2) is the lower
     // right hand corner
+#ifdef VBE_SUPPORT
+    int y;
+
+    // draw the rectangle one horizontal line per row - lineH already
+    // handles every DisplayBpp case (including the VESA-only asm fast paths)
+    for (y = y1; y <= y2; y++) {
+        lineH(x1, x2, y, color);
+    }
+#else
+    // mode-13h only, no VBE_SUPPORT: the book's original fixed addressing
     unsigned char FAR* startOffset; // starting memory offset of first row
     int width;  // width of rectangle
 
@@ -205,6 +563,7 @@ void drawRectangle(int x1, int y1, int x2, int y2, int color) {
         // move the memory pointer to the next line
         startOffset += 320;
     }
+#endif
 }
 
 void writeColorReg(int index, RgbColorPtr color) {
@@ -274,10 +633,69 @@ void writePalette(RgbPalettePtr palette) {
 }
 
 void printChar(int xc, int yc, char c, int color, int transparent) {
-    // this function is used to print a character on the screen. It uses the
-    // internal 8x8 character set to do this. Note that each character is
-    // 8 bytes where each byte represents the 8 pixels that make up the row
-    // of pixels
+#ifdef VBE_SUPPORT
+    // this function is used to print a character on the screen, using
+    // whichever font is currently loaded (GlyphWidth x GlyphHeight, bit-
+    // packed MSB-left, ceil(GlyphWidth/8) bytes per row - the 8x8 ROM font
+    // is just the default case of this, GlyphWidth==GlyphHeight==8)
+    int x, y, bpr;
+    unsigned char FAR* workChar;    // pointer to character being printed
+    unsigned char FAR* rowPtr;      // current row's pixel in video memory
+    unsigned char bitMask;          // bit mask used to extract proper bit
+
+    if (RomCharSet == NULL) {      // no font loaded (loadFontSet failed/never called yet)
+        return;
+    }
+
+    // bytes per glyph row, and offset of this character in the font table
+    bpr = (GlyphWidth + 7) / 8;
+    workChar = RomCharSet + (unsigned long)(unsigned char)c * GlyphHeight * bpr;
+
+    rowPtr  = VideoBuffer + PITCH_OFFSET(yc) + ((unsigned long)xc << DisplayBppShift);
+
+    // draw the character row by row - clip against DisplayWidth/DisplayHeight
+    // so a string can be positioned anywhere without the caller having to
+    // pre-compute a safe range (printChar/printString never did clipping,
+    // so a caller that lets a string run past the edge - e.g. a random
+    // on-screen position with a wide font - would otherwise corrupt
+    // whatever memory follows the video buffer)
+    for (y = 0; y < GlyphHeight; y++) {
+        if (yc + y >= 0 && yc + y < DisplayHeight) {
+            // draw each pixel of this row
+            for (x = 0; x < GlyphWidth; x++) {
+                if (xc + x >= 0 && xc + x < DisplayWidth) {
+                    bitMask = (unsigned char)(0x80 >> (x % 8));
+
+                    // test for transparent pixel i.e. 0, if not transparent then draw
+                    if (workChar[x / 8] & bitMask) {
+                        unsigned char FAR* p = rowPtr + ((unsigned long)x << DisplayBppShift);
+                        switch (DisplayBpp) {
+                            case 8:  *p = (unsigned char)color; break;
+                            case 16: *(unsigned short FAR*)p = (unsigned short)color; break;
+                            default: *(unsigned long FAR*)p  = (unsigned long)color; break;   // 32
+                        }
+                    } else if (!transparent) {
+                        // takes care of transparency - make black part opaque
+                        unsigned char FAR* p = rowPtr + ((unsigned long)x << DisplayBppShift);
+                        switch (DisplayBpp) {
+                            case 8:  *p = 0; break;
+                            case 16: *(unsigned short FAR*)p = 0; break;
+                            default: *(unsigned long FAR*)p  = 0; break;   // 32
+                        }
+                    }
+                }
+            }
+        }
+
+        // move to next line in video buffer and in font table
+        rowPtr += DisplayPitch;
+        workChar += bpr;
+    }
+#else
+    // mode-13h only, no VBE_SUPPORT: the book's original fixed 8x8 ROM font.
+    // It uses the internal 8x8 character set to do this. Note that each
+    // character is 8 bytes where each byte represents the 8 pixels that
+    // make up the row of pixels
     int offset,     // offset into video memory
         x,
         y;
@@ -315,18 +733,24 @@ void printChar(int xc, int yc, char c, int color, int transparent) {
         offset += MODE13_WIDTH;
         workChar++;
     }
+#endif
 }
 
 void printString(int x, int y, int color, char* string, int transparent) {
     // this function prints an entire string on the screen with fixed spacing
-    // between each character by calling the printChar() function
+    // (the current font's glyph width) between each character by calling
+    // the printChar() function
     int currentX = x;
     char* currentChar = string;
 
     // print the string a character at a time
     while (*currentChar != '\0') {
         printChar(currentX, y, *currentChar, color, transparent);
+#ifdef VBE_SUPPORT
+        currentX += GlyphWidth;
+#else
         currentX += ROM_CHAR_WIDTH;
+#endif
         currentChar++;
     }
 }
@@ -457,20 +881,77 @@ void writePixelZ(int x, int y, int color) {
     VideoBuffer[(y << 6) + (y << 4) + (x >> 2)] = (unsigned char)color;
 }
 
-#ifdef DOS_32_BIT
+#ifdef VBE_SUPPORT
+int loadFontSet(const char* filename, int size) {
+    // this function loads a square, bit-packed font file (like font.bin,
+    // but exp_font also writes larger cell sizes: font16.bin/font24.bin/
+    // font32.bin) - ceil(size/8) bytes per row, size rows, 256 glyphs.
+    // must be called during program initialization before any text rendering
+    FILE* fontFile;
+    unsigned long total = (unsigned long)((size + 7) / 8) * size * 256;
+    unsigned long bytesRead;
+
+    // drop whatever font (if any) is already loaded first
+    freeFontSet();
+
+    // allocate memory for the font data
+    RomCharSet = (unsigned char*)MALLOC(total);
+    if (!RomCharSet) {
+        printf("Error: Could not allocate memory for font\n");
+        return 0;
+    }
+
+    // open the font file
+    fontFile = fopen(filename, "rb");
+    if (!fontFile) {
+        printf("Error: Could not open %s\n", filename);
+        printf("Run exp_font.exe to generate it first!\n");
+        FREE(RomCharSet);
+        RomCharSet = NULL;
+        return 0;
+    }
+
+    // read the entire font into memory
+    bytesRead = (unsigned long)fread(RomCharSet, 1, total, fontFile);
+
+    // close the file
+    fclose(fontFile);
+
+    // verify we read all the bytes we expected
+    if (bytesRead != total) {
+        printf("Error: Could not read font data (got %lu bytes, expected %lu)\n", bytesRead, total);
+        FREE(RomCharSet);
+        RomCharSet = NULL;
+        return 0;
+    }
+
+    // success
+    GlyphWidth  = size;
+    GlyphHeight = size;
+    return 1;
+}
+
+void freeFontSet(void) {
+    // this function frees the memory allocated for the currently loaded font
+    if (RomCharSet) {
+        FREE(RomCharSet);
+        RomCharSet = NULL;
+    }
+}
+#elif defined(DOS_32_BIT)
 int initRomCharSet(void) {
     // this function loads the ROM character set from font.bin file
     // must be called during program initialization before any text rendering
     FILE* fontFile;                 // file handle for font.bin
     unsigned int bytesRead;         // number of bytes read from file
-    
+
     // allocate memory for the font data (256 characters * 8 bytes = 2048 bytes)
     RomCharSet = (unsigned char*)MALLOC(2048);
     if (!RomCharSet) {
         printf("Error: Could not allocate memory for font\n");
         return 0;
     }
-    
+
     // open the font file
     fontFile = fopen("font.bin", "rb");
     if (!fontFile) {
@@ -480,13 +961,13 @@ int initRomCharSet(void) {
         RomCharSet = NULL;
         return 0;
     }
-    
+
     // read the entire font into memory
     bytesRead = fread(RomCharSet, 1, 2048, fontFile);
-    
+
     // close the file
     fclose(fontFile);
-    
+
     // verify we read all 2048 bytes
     if (bytesRead != 2048) {
         printf("Error: Could not read font data (got %u bytes, expected 2048)\n", bytesRead);
@@ -494,7 +975,7 @@ int initRomCharSet(void) {
         RomCharSet = NULL;
         return 0;
     }
-    
+
     // success
     return 1;
 }
@@ -519,7 +1000,7 @@ void exitToDos(int returnCode) {
     // C runtime cleanup code
     //
     // return code: 0 = success, non-zero = error (0-255)
-    
+
     _asm {
         mov al, byte ptr returnCode  ; AL = return code (0-255)
         mov ah, 4Ch                   ; AH = 4Ch (DOS terminate program)

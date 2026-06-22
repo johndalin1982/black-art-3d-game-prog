@@ -36,18 +36,30 @@ void main(int argc, char** argv) {
 
     srand(time(NULL));
 
+#ifdef VBE_SUPPORT
+    // set the graphics mode to SVGA 640x480x256
+    setGraphicsModeVesa(640, 480, 8);
+
+    // create the double buffer
+    createDoubleBuffer(480);
+#else
     // set the graphics mode to mode 13h
     setGraphicsMode(GRAPHICS_MODE13);
 
     // create the double buffer
     createDoubleBuffer(200);
+#endif
 
     // load the imagery for ant
     pcxInit(&ImagePcx);
     pcxLoad("moreants.pcx", &ImagePcx, 1);
 
     // initialize the ant sprite
+#ifdef VBE_SUPPORT
+    spriteInit(&AntSprite, 0, 0, 24, 12, 0, 0, 0, 0, 0, 0);
+#else
     spriteInit(&AntSprite, 0, 0, 12, 6, 0, 0, 0, 0, 0, 0);
+#endif
 
     // extract the bitmaps for the ant, there are 3 animation cells for each
     // direction thus 6 cells
@@ -63,7 +75,11 @@ void main(int argc, char** argv) {
     pcxLoad("hammer.pcx", &ImagePcx, 1);
 
     // initialize the hammer sprite that will take the place of the mouse pointer
+#ifdef VBE_SUPPORT
+    spriteInit(&HammerSprite, 0, 0, 44, 40, 0, 0, 0, 0, 0, 0);
+#else
     spriteInit(&HammerSprite, 0, 0, 22, 20, 0, 0, 0, 0, 0, 0);
+#endif
 
     // extract the bitmaps for the hammer there are 5
     for (index = 0; index < 5; index++) {
@@ -109,8 +125,13 @@ void main(int argc, char** argv) {
         mouseControl(MOUSE_POSITION_BUTTONS, &mouseX, &mouseY, &buttons);
 
         // map the mouse position to the screen and assign it to HammerSprite
+#ifdef VBE_SUPPORT
+        HammerSprite.x = mouseX - 22;
+        HammerSprite.y = mouseY - 20;
+#else
         HammerSprite.x = (mouseX >> 1) - 16;
         HammerSprite.y = mouseY;
+#endif
 
         // test if player is trying to use HammerSprite
         if (buttons == MOUSE_LEFT_BUTTON && HammerSprite.state == HAMMER_UP) {
@@ -129,8 +150,13 @@ void main(int argc, char** argv) {
             // test if HammerSprite is hitting AntSprite
             if (HammerSprite.currFrame == 3 && AntSprite.state != ANT_DEAD) {
                 // do a collision test between the HammerSprite and the AntSprite
+#ifdef VBE_SUPPORT
+                if (AntSprite.x > HammerSprite.x && AntSprite.x + 24 < HammerSprite.x + 44 &&
+                    AntSprite.y > HammerSprite.y && AntSprite.y + 12 < HammerSprite.y + 40) {
+#else
                 if (AntSprite.x > HammerSprite.x && AntSprite.x + 12 < HammerSprite.x + 22 &&
                     AntSprite.y > HammerSprite.y && AntSprite.y + 6 < HammerSprite.y + 20) {
+#endif
 
                     // kill ant
                     AntSprite.state = ANT_DEAD;
@@ -153,6 +179,23 @@ void main(int argc, char** argv) {
         // test if it's time to start an ant
         if (AntSprite.state == ANT_DEAD && rand() % 10 == 0) {
             // which direction will ant move in
+#ifdef VBE_SUPPORT
+            if (rand() % 2 == 0) {
+                // move ant east
+                AntSprite.y = rand() % 480;               // starting y position
+                AntSprite.x = 0;                          // starting x position
+                AntSprite.counter1 = 4 + rand() % 20;     // ant speed
+                AntSprite.state = ANT_EAST;               // ant direction
+                AntSprite.currFrame = 0;                  // starting animation frame
+            } else {
+                // move ant west
+                AntSprite.y = rand() % 480;               // starting y position
+                AntSprite.x = 640;                        // starting x position
+                AntSprite.counter1 = -(4 + rand() % 20);  // ant speed
+                AntSprite.state = ANT_WEST;               // ant direction
+                AntSprite.currFrame = 0;                  // starting animation frame
+            }
+#else
             if (rand() % 2 == 0) {
                 // move ant east
                 AntSprite.y = rand() % 200;             // starting y position
@@ -168,6 +211,7 @@ void main(int argc, char** argv) {
                 AntSprite.state = ANT_WEST;             // ant direction
                 AntSprite.currFrame = 0;                // starting animation frame
             }
+#endif
         }
 
         // test if ant is alive
@@ -177,9 +221,15 @@ void main(int argc, char** argv) {
             AntSprite.x += AntSprite.counter1;
 
             // is ant off screen?
+#ifdef VBE_SUPPORT
+            if (AntSprite.x < 0 || AntSprite.x > 640) {
+                AntSprite.state = ANT_DEAD;
+            }
+#else
             if (AntSprite.x < 0 || AntSprite.x > 320) {
                 AntSprite.state = ANT_DEAD;
             }
+#endif
 
             // animate the ant use proper animation cells based on direction
             // cells 0-2 are for eastward motion, cells 3-5 are for westward motion

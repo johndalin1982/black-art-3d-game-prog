@@ -26,8 +26,13 @@ void main(int argc, char** argv) {
     RgbColor onColor = { 0, 63, 0 }, // the color values for the on and off buttons
              offColor = { 0, 20, 0 };
 
+#ifdef VBE_SUPPORT
+    // set the graphics mode to SVGA 640x480x256
+    setGraphicsModeVesa(640, 480, 8);
+#else
     // set the graphics mode to mode 13h
     setGraphicsMode(GRAPHICS_MODE13);
+#endif
 
     // load the screen image
     pcxInit(&ImagePcx);
@@ -35,7 +40,11 @@ void main(int argc, char** argv) {
     //load a PCX file (make sure it's there)
     if (pcxLoad("keypad.pcx", &ImagePcx, 1)) {
         // copy the image to the display buffer
+#ifdef VBE_SUPPORT
+        pcxCopyToBuffer(&ImagePcx, VideoBuffer);
+#else
         pcxShowBuffer(&ImagePcx);
+#endif
 
         // delete the PCX buffer
         pcxDelete(&ImagePcx);
@@ -45,8 +54,10 @@ void main(int argc, char** argv) {
 
         // enter main even loop
         while (!KeyboardState[MAKE_ESC]) {
+#ifndef VBE_SUPPORT
             // to avoid video snow wait for vertical retrace
             waitForVerticalRetrace();
+#endif
 
             // now test all the keys to see if they are pressed or released
             // based on this turn the virtual light that illuminates each

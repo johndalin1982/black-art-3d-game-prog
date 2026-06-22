@@ -24,8 +24,15 @@ Sprite ShipSprite;      // the players ship
 
 // these are the velocity lookup tables, they have pre-computed velocities
 // for each of the 16 directions the ship can point
+#ifdef VBE_SUPPORT
+int XVelocity[SHIP_FRAMES] = {   0,   4,   8,   8,  12,   8,   8,   4,
+                                  0,  -4,  -8,  -8, -12,  -8,  -8,  -4 };
+int YVelocity[SHIP_FRAMES] = { -12,  -8,  -8,  -4,   0,   4,   8,   8,
+                                 12,   8,   8,   4,   0,  -4,  -8,  -8 };
+#else
 int XVelocity[SHIP_FRAMES] = {  0,  2,  4,  4, 6, 4, 4, 2, 0, -2, -4, -4, -6, -4, -4, -2 };
 int YVelocity[SHIP_FRAMES] = { -6, -4, -4, -2, 0, 2, 4, 4, 6,  4,  4,  2,  0, -2, -4, -4 };
+#endif
 
 void main(int argc, char** argv) {
     int index,
@@ -49,18 +56,30 @@ void main(int argc, char** argv) {
     dx = (int)(0.5f + 0.15f * (Joystick1MaxX - Joystick1MinX));
     dy = (int)(0.5f + 0.15f * (Joystick1MaxY - Joystick1MinY));
 
+#ifdef VBE_SUPPORT
+    // set the graphics mode to SVGA 640x480x256
+    setGraphicsModeVesa(640, 480, 8);
+
+    // create the double buffer
+    createDoubleBuffer(480);
+#else
     // set the graphics mode to mode 13h
     setGraphicsMode(GRAPHICS_MODE13);
 
     // create the double buffer
     createDoubleBuffer(200);
+#endif
 
     // load the imagery for ship
     pcxInit(&ImagePcx);
     pcxLoad("falcon.pcx", &ImagePcx, 1);
 
     // initialize the ship sprite
+#ifdef VBE_SUPPORT
+    spriteInit(&ShipSprite, 320, 240, 48, 40, 0, 0, 0, 0, 0, 0);
+#else
     spriteInit(&ShipSprite, 160, 100, 24, 20, 0, 0, 0, 0, 0, 0);
+#endif
 
     // extract the bitmaps for the ship, there are 16 of them, one for each
     // pre-rotated angle
@@ -133,6 +152,19 @@ void main(int argc, char** argv) {
         }
 
         // clip ship to screen universe
+#ifdef VBE_SUPPORT
+        if (ShipSprite.x > 639) {
+            ShipSprite.x = -48;
+        } else if (ShipSprite.x < -48) {
+            ShipSprite.x = 639;
+        }
+
+        if (ShipSprite.y > 479) {
+            ShipSprite.y = -40;
+        } else if (ShipSprite.y < -40) {
+            ShipSprite.y = 479;
+        }
+#else
         if (ShipSprite.x > 319) {
             ShipSprite.x = -24;
         } else if (ShipSprite.x < -24) {
@@ -144,6 +176,7 @@ void main(int argc, char** argv) {
         } else if (ShipSprite.y < -20) {
             ShipSprite.y = 199;
         }
+#endif
 
         // ready to draw ship, but first scan background under them
         spriteUnderClip(&ShipSprite, DoubleBuffer);

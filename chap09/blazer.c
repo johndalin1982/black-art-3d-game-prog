@@ -1,4 +1,6 @@
-// blazer.c - Version 1.0
+// blazer.c - Starblazer: 320x200 mode 13h, 640x480x256 SVGA with
+// -dVBE_SUPPORT, or 1024x768 true-colour with IPX LAN play and AI via
+// -dBLAZERX -dVBE_SUPPORT (blazerx.tgt sets both)
 
 #include <io.h>
 #include <conio.h>
@@ -9,6 +11,9 @@
 #include <memory.h>
 #include <malloc.h>
 #include <math.h>
+#ifdef VBE_SUPPORT
+#include <stdlib.h>
+#endif
 #include <string.h>
 
 #include "black3.h"
@@ -17,9 +22,8 @@
 #include "black6.h"
 #include "black8.h"
 #include "black9.h"
-
-#ifdef NET_ENABLED
-#include "ipx.h"          // LAN multiplayer over IPX (DOSBox-X ipxnet / real IPX LAN)
+#ifdef BLAZERX
+#include "ipx.h"
 #endif
 
 // digital sound system
@@ -59,8 +63,15 @@
 // defines for the super nova explosion
 #define NUM_CINDERS         20      // maximum number of cinders per explosion
 
+#ifdef BLAZERX
+// a cinder's color steps through this 16-entry fire gradient (pale red to
+// dark orange) over its lifetime - .color holds an index into it, 0..15
+#define CINDER_START_COLOR  0       // starting cinder color index
+#define CINDER_END_COLOR    15      // ending cinder color index
+#else
 #define CINDER_START_COLOR  48      // starting cinder color
 #define CINDER_END_COLOR    (48+15) // ending cinder color
+#endif
 
 #define NUM_NOVAS           3       // maximum number of super novas in game
 
@@ -68,21 +79,88 @@
 #define NOVA_INACTIVE       0
 
 // heads up display defines
+#ifdef BLAZERX
+//
+// The scanner is UI, not a CAM_ZOOM'd world object: its size/position track
+// screen resolution only. 640x480 and 1024x768 share the same 4:3 aspect (a
+// clean uniform 1024/640 = 768/480 = 1.6x both axes, unlike the 320x200 ->
+// 640x480 step - see vbe/chap09/blazer.c's SCANNER_Y comment), so these are
+// simply 1.6x the corrected 640x480 values (256, 399, grid 128x76).
+#define SCANNER_X           410     // 256 * 1.6
+#define SCANNER_Y           638     // 399 * 1.6
+
+// Grid lines thicken with resolution too - 1.6x of vbe/chap09/blazer.c's
+// 2px (see SCANNER_LINE_THICK there), rounded to the nearest clean integer.
+#define SCANNER_LINE_THICK  3
+#else
+#ifdef VBE_SUPPORT
+//
+// The scanner grid: 320x200 original is SCANNER_X=128 (40% of width),
+// SCANNER_Y=166, grid 64x32 - bottom edge at 198, 2px from the 200px-tall
+// screen (hugs the bottom). Grid is 20% of width, 16% of height. 640x480 and
+// 320x200 do NOT share an aspect ratio (4:3 vs 8:5), so width scaled a clean
+// 2x (128->256) but height must scale by the true 480/200=2.4x, not 2x, to
+// keep the same hugs-the-bottom position and screen-proportion size:
+// height 32 * 2.4 = 76.8 -> 76 (a clean 38px/row split); bottom margin
+// 2 * 2.4 = 4.8 -> 5px; SCANNER_Y = 480 - 76 - 5 = 399.
+#define SCANNER_X           256     // position of scanner on screen
+#define SCANNER_Y           399
+
+// Grid lines are the book's 1px, which reads as too thin at this
+// resolution's larger scanner box - thickened to 2px (see lineH2Thick/
+// lineV2Thick).
+#define SCANNER_LINE_THICK  2
+#else
 #define SCANNER_X           128     // position of scanner on screen
 #define SCANNER_Y           166
+#endif
+#endif
 
 #define MAX_BLIPS           50      // maximum number of scanner blips
 
+#ifdef VBE_SUPPORT
+// The book's blips are a single pixel, which reads as an invisible speck at
+// this resolution's larger scanner box - same rationale, same value, as
+// SCANNER_LINE_THICK.
+#define BLIP_SIZE           SCANNER_LINE_THICK
+#endif
+
+#ifdef BLAZERX
+#define BLIP_ASTEROID       RGB32(85, 85,255)  // colors for scanner blips
+#define BLIP_PLAYER         RGB32(85,255, 85)
+#define BLIP_REMOTE         RGB32(255,85, 85)
+#define BLIP_ALIEN          RGB32(255,85,255)
+#else
 #define BLIP_ASTEROID       9       // colors dor scanner blips
 #define BLIP_PLAYER         10
 #define BLIP_REMOTE         12
 #define BLIP_ALIEN          13
+#endif
 
+#ifdef BLAZERX
+#define MISSILE_COLOR       RGB32(85,255,85)   // photon missile color
+#define SCANNER_GRID_COLOR  RGB32(85,255,85)   // scanner grid line color
+
+#define RIGHT_HEADS_TEXT_X  768     // position of rightmost text for headsup
+#define RIGHT_HEADS_TEXT_Y  384
+
+#define LEFT_HEADS_TEXT_X   0       // position of leftmost text for headsup
+#define LEFT_HEADS_TEXT_Y   384
+#else
+#ifdef VBE_SUPPORT
+#define RIGHT_HEADS_TEXT_X  480     // position of rightmost text for headsup
+#define RIGHT_HEADS_TEXT_Y  240
+
+#define LEFT_HEADS_TEXT_X   0       // position of leftmost text for headsup
+#define LEFT_HEADS_TEXT_Y   240
+#else
 #define RIGHT_HEADS_TEXT_X  240     // position of rightmost text for headsup
 #define RIGHT_HEADS_TEXT_Y  120
 
 #define LEFT_HEADS_TEXT_X   0       // position of leftmost text for headsup
 #define LEFT_HEADS_TEXT_Y   120
+#endif
+#endif
 
 #define HEADS_CLOAK         1       // bitmap indices for various headsup elements
 #define HEADS_SCANNER       2
@@ -122,8 +200,18 @@
 #define WORMHOLE_Y          1250
 
 // starting position of the intro startup sequence
+#ifdef BLAZERX
+#define START_MESS_X        6
+#define START_MESS_Y        26
+#else
+#ifdef VBE_SUPPORT
+#define START_MESS_X        4
+#define START_MESS_Y        16
+#else
 #define START_MESS_X        2
 #define START_MESS_Y        8
+#endif
+#endif
 
 // general explosions
 #define NUM_EXPLOSIONS          4   // number of explosions that can run at once
@@ -165,18 +253,79 @@
 
 #define NUM_SETUP                   7   // number of setup choices
 
+#ifdef BLAZERX
+// the coordinates of the setup display window (486,163,146,67 * 1024/640,
+// 768/480 - blazecon.pcx was rescaled by the same factor, so this stays
+// aligned with the window drawn into that background)
+#define DISPLAY_X                   778 // position of the small setup display box
+#define DISPLAY_Y                   261
+#define DISPLAY_WIDTH               234 // size of window
+#define DISPLAY_HEIGHT              107
+#else
 // the coordinates of the setup display window
+#ifdef VBE_SUPPORT
+#define DISPLAY_X                   486 // position of the small setup display box
+#define DISPLAY_Y                   163
+#define DISPLAY_WIDTH               146 // size of window
+#define DISPLAY_HEIGHT              67
+#else
 #define DISPLAY_X                   243 // position of the small setup display box
 #define DISPLAY_Y                   68
 #define DISPLAY_WIDTH               73  // size of window
 #define DISPLAY_HEIGHT              28
+#endif
+#endif
 
 #define DISPLAY_IMG_SHIPS           0   // commands to the display function
 #define DISPLAY_IMG_PORTS           1   // indicating icons to display
 
+#ifdef BLAZERX
+// The camera: the game simulates in the book's 320x200-era units (one unit =
+// one mode-13h pixel), and the camera scales that world onto the 1024x768
+// render window at draw time - so speeds, distances and collision sizes keep
+// the book's values. VIEW_* is how much of the universe is visible. The
+// sprite bitmaps are pre-scaled by CAM_ZOOM, so only positions transform.
+#define CAM_ZOOM            4                   // world units -> screen pixels
+#define VIEW_WIDTH          (1024 / CAM_ZOOM)   // world units visible across
+#define VIEW_HEIGHT         (768 / CAM_ZOOM)    // world units visible down
+#else
+#ifdef VBE_SUPPORT
+// The camera: the game simulates in the book's 320x200-era units (one unit =
+// one mode-13h pixel), and the camera scales that world onto the 640x480
+// render window at draw time - so speeds, distances and collision sizes keep
+// the book's values. VIEW_* is how much of the universe is visible. The
+// sprite bitmaps are pre-scaled by CAM_ZOOM, so only positions transform.
+#define CAM_ZOOM            2                   // world units -> screen pixels
+#define VIEW_WIDTH          (640 / CAM_ZOOM)    // world units visible across
+#define VIEW_HEIGHT         (480 / CAM_ZOOM)    // world units visible down
+#endif
+#endif
+
+#ifdef BLAZERX
+#define SPRITE_TRANSPARENT_COLOR   RGB32(255, 0, 255)   // magic magenta: the sprite-sheet key color
+
+// Shield/engine tint-key colors baked into blazeshl.pcx/blazeshr.pcx (by
+// regen_assets.py) at the pixel positions that used to be the reserved
+// shield/engine palette registers. Index 0 = shield region, index 1 = engine
+// region - matches spriteDrawTinted's tintColors ordering.
+static const unsigned long PlayersTintKeys[2] = { RGB32(0,0,255), RGB32(43,199,139) };
+static const unsigned long RemotesTintKeys[2] = { RGB32(255,0,0), RGB32(43,199,183) };
+
+// size of the "tech" font used in intro (8x14 * 1024/640, 768/480 - blazefnt.pcx
+// was rescaled by the same factor, since it's screen-space UI, not part of
+// the CAM_ZOOM'd world)
+#define TECH_FONT_WIDTH             13  // width of high tech font
+#define TECH_FONT_HEIGHT            22  // height of high tech font
+#else
 // size of the "tech" font used in intro
+#ifdef VBE_SUPPORT
+#define TECH_FONT_WIDTH             8   // width of high tech font
+#define TECH_FONT_HEIGHT            14  // height of high tech font
+#else
 #define TECH_FONT_WIDTH             4   // width of high tech font
 #define TECH_FONT_HEIGHT            7   // height of high tech font
+#endif
+#endif
 #define NUM_TECH_FONT               64  // number of characters in tech font
 
 // asteroid defines
@@ -220,9 +369,15 @@
 #define STAR_PLANE_1                1   // near plane
 #define STAR_PLANE_2                2
 
+#ifdef BLAZERX
+#define STAR_COLOR_0                RGB32( 85, 85, 85)  // color of farthest star plane
+#define STAR_COLOR_1                RGB32(170,170,170)
+#define STAR_COLOR_2                RGB32(255,255,255) // color of nearest star plane
+#else
 #define STAR_COLOR_0                8   // color of farthest star plane
 #define STAR_COLOR_1                7
 #define STAR_COLOR_2                15  // color of nearest star plane
+#endif
 
 // dimensions of the universe
 #define UNIVERSE_WIDTH              2500
@@ -236,9 +391,28 @@
 #define SHIP_WIDTH                  22  // size of both ships
 #define SHIP_HEIGHT                 18
 
+#ifdef VBE_SUPPORT
+// world sizes of the other in-world sprites (sprite bitmaps are pre-scaled
+// x CAM_ZOOM, so spriteInit passes these x CAM_ZOOM, same as the ships
+// and asteroids above)
+#define EXPLOSION_WIDTH             28
+#define EXPLOSION_HEIGHT            22
+
+#define WORMHOLE_WIDTH              26
+#define WORMHOLE_HEIGHT             22
+
+#define FUEL_CELL_WIDTH             20
+#define FUEL_CELL_HEIGHT            18
+
+#define ALIEN_WIDTH                 14
+#define ALIEN_HEIGHT                8
+#endif
+
+#ifndef BLAZERX
 // shield defines
 #define PLAYERS_SHIELD_REG          240 // color registers of players shield
 #define REMOTES_SHIELD_REG          241 // color and remotes shield color
+#endif
 
 // shield timing (applies to both the player and the enemy AI). Once raised,
 // shields stay up for SHIELD_ON_TIME frames and CANNOT be dropped early; when
@@ -247,6 +421,14 @@
 #define SHIELD_ON_TIME              100
 #define SHIELD_COOLDOWN_TIME        100
 
+#ifdef BLAZERX
+// Which sprite pixels are the shield-glow/engine-flame regions is now
+// identified by color (PlayersTintKeys/RemotesTintKeys, defined above) rather
+// than a DAC register number - a ship's own sheet already distinguishes
+// player/remote and shield/engine by which of its two tint keys a pixel
+// matches, so a single shared tint-key pair per ship side is enough (no
+// separate per-ship-part register numbers needed).
+#else
 // engine defines
 #define PLAYERS_ENGINE_REG          242 // color registers for engine flicker
 // BUG FIX: the book defined this as 241 — the SAME register as REMOTES_SHIELD_REG
@@ -255,10 +437,32 @@
 // 243 is the distinct register the remote ship's art uses (240/241/242/243 =
 // P-shield / R-shield / P-engine / R-engine).
 #define REMOTES_ENGINE_REG          243
+#endif
 
+#ifdef BLAZERX
+// the setup screen's scrolling light strip: a vertical band on blazecon.pcx,
+// a horizontal band on blazeins.pcx (screen argument to panelFx selects
+// which). Positions are the original art's light-strip bounding box * the
+// same 1024/640, 768/480 factor used throughout the resolution port.
+#define PANEL_FX_CONTROL            0
+#define PANEL_FX_BRIEFING           1
+
+#define NUM_PANEL_LIGHTS            10  // number of scrolling light segments
+
+#define PANEL_LIGHTS_CONTROL_X1     272
+#define PANEL_LIGHTS_CONTROL_X2     315
+#define PANEL_LIGHTS_CONTROL_Y1     238
+#define PANEL_LIGHTS_CONTROL_Y2     643
+
+#define PANEL_LIGHTS_BRIEFING_X1    291
+#define PANEL_LIGHTS_BRIEFING_X2    437
+#define PANEL_LIGHTS_BRIEFING_Y1    46
+#define PANEL_LIGHTS_BRIEFING_Y2    64
+#else
 // introduction panel colors
 #define END_PANEL_REG               41  // the color register range for the
 #define START_PANEL_REG             32  // scrolling red lights on setup screen
+#endif
 
 // general identifiers for the player and remote
 #define THE_PLAYER                  0
@@ -277,15 +481,22 @@
 #define REMOTE_FIRE                 32
 #define REMOTE_ESC                  64
 
+#ifdef BLAZERX
 // single-player AI difficulty knobs. Lower the fire cooldown / raise the range and
 // missile count to make the enemy shoot more; do the opposite to ease off.
 #define AI_FIRE_RANGE       230     // shoots at the player within this Manhattan distance
 #define AI_FIRE_COOLDOWN    24      // base frames between shots (smaller = more shooting)
 #define AI_FIRE_JITTER      12      // random extra frames added to the cooldown
 #define AI_MAX_MISSILES     2       // most AI shots allowed in flight at once (sim cap 5)
+#define AI_AIM_ERROR        1       // aim slip in heading steps: each shot lands within
+                                    // +/- this many 22.5-degree steps of the true
+                                    // intercept (0 = sniper, 2 = wild)
 #define AI_SHIELD_RANGE     40      // raises shields only for missiles this close
 #define AI_START_GRACE      36      // frames of "hold fire" when a solo game starts
 #define AI_LOW_ENERGY       1500    // below this the enemy breaks off to conserve
+#define AI_CLOAK_ENERGY     6000    // cloaks to reposition only above this energy
+#define AI_AVOID_AHEAD      10      // frames of course lookahead for asteroid avoidance
+#define AI_AVOID_RANGE      30      // clearance (Manhattan) kept around a rock's size
 
 // Smooth movement. The enemy steers its *velocity* (not its position): each frame
 // it aims for the player's velocity plus a small per-behavior maneuver, and only
@@ -300,23 +511,24 @@
 #define AI_VEL_TOL          4
 
 // engagement distances (Manhattan) the behaviors hold relative to the player
-#define AI_HUNT_DIST        60      // HUNT closes to here, then paces the player and fires
-#define AI_STRAFE_DIST      100     // STRAFE circles at this radius
+#define AI_HUNT_DIST        100     // HUNT closes to here, then paces the player and fires
+#define AI_STRAFE_DIST      120     // STRAFE circles at this radius
 #define AI_STRAFE_BAND      25      // STRAFE nudges in/out only beyond this band around
                                     // AI_STRAFE_DIST; inside it it just circles (no jitter)
-#define AI_FLEE_DIST        120     // FLEE backs off to here
+#define AI_FLEE_DIST        140     // FLEE backs off to here
 
 // Backstop so it never leaves the player's ~320x200 view: beyond the return
 // distance, or past the per-axis leash, it drops everything and heads back in.
-#define AI_RETURN_DIST      140     // Manhattan distance that forces a return
+#define AI_RETURN_DIST      160     // Manhattan distance that forces a return
 #define AI_LEASH_X          150     // max horizontal stray before forcing a return
-#define AI_LEASH_Y          100     // max vertical stray before forcing a return
+#define AI_LEASH_Y          110     // max vertical stray before forcing a return
 
 // enemy AI behavior states
 #define AI_HUNT             0       // close in, pace the player, and shoot (most common)
 #define AI_STRAFE           1       // circle the player at range
 #define AI_FLEE             2       // back off to reposition (no firing)
 
+#endif
 // this is the structure for the asteroids
 typedef struct AsteroidType {
     int xv;         // x velocity of asteroid
@@ -328,10 +540,22 @@ typedef struct AsteroidType {
 
 // this is the structure for the stars
 typedef struct StarType {
+#ifdef VBE_SUPPORT
+    int x, y;       // position of star, in view (pre-camera) units
+#else
     int x, y;       // position of star
+#endif
     int color;      // color of star
     int plane;      // plane that star is in
+#ifdef BLAZERX
+    unsigned long backColor[CAM_ZOOM * CAM_ZOOM];   // the pixels under the star
+#else
+#ifdef VBE_SUPPORT
+    unsigned char backColor[CAM_ZOOM * CAM_ZOOM];   // the pixels under the star
+#else
     int backColor;  // the color of the pixel under the star
+#endif
+#endif
 } Star, *StarPtr;
 
 // this is the structure used for weapons and explosion particles
@@ -344,7 +568,15 @@ typedef struct ParticleType {
     int counter;    // general counter
     int threshold;  // threshold for counter
     int color;      // color of particle
+#ifdef BLAZERX
+    unsigned long backColor[CAM_ZOOM * CAM_ZOOM];   // the pixels under the particle
+#else
+#ifdef VBE_SUPPORT
+    unsigned char backColor[CAM_ZOOM * CAM_ZOOM];   // the pixels under the particle
+#else
     int backColor;  // the color of the pixel under the particle
+#endif
+#endif
     int visible;    // helps speed clipping
     int lifetime;   // the lifetime of the particle in frames
 } Particle, *ParticlePtr;
@@ -398,10 +630,14 @@ void startPlayersDeath(void);
 void resetPlayer(void);
 void resetRemote(void);
 void startRemotesDeath(void);
+#ifdef BLAZERX
 int aiHeading(int vx, int vy);
 void aiPickState(void);
 int computeRemoteAi(void);
+void panelFx(int screen);
+#else
 void panelFx(void);
+#endif
 void eraseMissiles(void);
 void underMissiles(void);
 void drawMissiles(void);
@@ -450,15 +686,28 @@ int digitalFxPlay(int effect, int priority);
 void drawBlips(void);
 void underBlips(void);
 void eraseBlips(void);
+#ifdef BLAZERX
+void cameraPixelUnder(int sx, int sy, unsigned long* back);
+void cameraPixelDraw(int sx, int sy, int color);
+void cameraPixelErase(int sx, int sy, const unsigned long* back);
+#else
+#ifdef VBE_SUPPORT
+void cameraPixelUnder(int sx, int sy, unsigned char* back);
+void cameraPixelDraw(int sx, int sy, int color);
+void cameraPixelErase(int sx, int sy, const unsigned char* back);
+#endif
+#endif
 
 PcxPicture ImagePcx,        // general PCX image used to load background and imagery
            ImageControls;   // this holds the controls screen
 
+#ifndef BLAZERX
 RgbColor Color1, Color2;    // used for temporaries during color rotation
 
 RgbPalette GamePalette;     // this will hold the startup system palette
                             // so we can restore it after screen FX
 
+#endif
 Sprite Button1,             // the setup buttons
        Button2,
        Button3,
@@ -504,17 +753,22 @@ int Master = 1,                     // the player dials up a player
     Slave = 0,                      // then he is master else he is alive
     Linked = 0,                     // state of the model communications system
     Winner = WINNER_NONE;           // the winner of the game
+#ifdef BLAZERX
 
 // single-player support: when AiEnabled is set the remote ship is flown by the
 // computer instead of a networked peer. The AI produces the same REMOTE_* input
 // byte a human would send, so the whole remote simulation runs unchanged.
 int AiEnabled    = 0,               // 1 = remote ship is AI controlled (solo play)
     AiFireDelay  = 0,               // cooldown counter between AI shots
+    AiAimSlip    = 0,               // this shot's aim error, in heading steps
     AiState      = AI_HUNT,         // the enemy's current behavior mode
     AiStateTimer = 0,               // frames left before re-choosing a behavior
     AiOrbitDir   = 1,               // +1 / -1: which way STRAFE / WANDER circles
-    AiLastX      = 0,               // last spot the enemy saw the player at - it
-    AiLastY      = 0;               // steers here (and holds fire) while cloaked
+    AiLastX      = 0,               // where the enemy last saw the player - the
+    AiLastY      = 0,               // ghost it tracks (fire held) while cloaked
+    AiLastVx     = 0,               // the player's velocity when last seen - the
+    AiLastVy     = 0;               // ghost coasts on it while he stays cloaked
+#endif
 
 // the start up arrays used to differentiate the player and remote
 
@@ -558,9 +812,16 @@ int DebounceHud           = 0,      // these are used to debounce the players
     DebounceFire          = 0,
     DebounceShields       = 0;
 
+#ifdef VBE_SUPPORT
+int RefreshHeads          = 0;      // used to track when HUD needs refreshing
+
+int UnderPlayersBlip[BLIP_SIZE * BLIP_SIZE],  // these hold the pixels under the
+    UnderRemotesBlip[BLIP_SIZE * BLIP_SIZE];  // scanner blip of the player and remote
+#else
 int RefreshHeads          = 0,      // used to track when HUD needs refreshing
     UnderPlayersBlip,               // these hold the pixels under the scanner
     UnderRemotesBlip;               // blip image of the player and remote
+#endif
 
 int RemotesLastX          = 0,      // the last position of player
     RemotesLastY          = 0,
@@ -644,6 +905,21 @@ RgbColor PrimaryRed   = { 63, 0, 0 },   // pure red
          PlayersEngineColor = { 0, 0, 0 },  // the color of the players engine
          RemotesEngineColor = { 0, 0, 0 };  // the color of the remotes engine
 
+#ifdef BLAZERX
+// The live shield/engine colors above are still computed in RgbColor's
+// 6-bit VGA range (the pulse/flicker tuning is unchanged), then converted
+// here for spriteDrawTinted. PlayersTintColors[0]/RemotesTintColors[0]
+// hold the current RGB32 shield color, [1] the current engine color - 0
+// (black) means off. Passed straight to spriteDrawTinted, matching the
+// region ordering of PlayersTintKeys/RemotesTintKeys.
+unsigned long PlayersTintColors[2] = { 0, 0 };
+unsigned long RemotesTintColors[2] = { 0, 0 };
+
+unsigned long vgaColorToRGB32(RgbColor c) {
+    return RGB32(c.red * 255 / 63, c.green * 255 / 63, c.blue * 255 / 63);
+}
+#endif
+
 // the instruction pages
 char* Instructions[] = {
                "STARBLAZER MISSION BRIEFING,       ",
@@ -718,13 +994,15 @@ char* Instructions[] = {
                "                                   ",
                "TO PLAY THE GAME YOU CAN EITHER    ",
                "PLAY SOLO AGAINST THE COMPUTER OR  ",
-#ifdef NET_ENABLED
+#ifdef BLAZERX
                "OVER A LAN (IPX). IN SOLO MODE AN  ",
-#else
-               "MODEM-2-MODEM. IN SOLO MODE AN     ",
-#endif
                "AI-CONTROLLED ENEMY SHIP WILL HUNT ",
                "YOU THROUGH THE ASTEROID BELT. TO  ",
+#else
+               "MODEM-2-MODEM. AN ENEMY SHIP SITS  ",
+               "AT ITS SPAWN IN THE ASTEROID BELT  ",
+               "AS A STATIONARY TARGET. TO         ",
+#endif
                "PLAY SOLO, PICK YOUR SHIP WITH THE ",
                "SELECT SHIP OPTION ON THE MAIN     ",
                "MENU, THEN USE THE PLAY SOLO       ",
@@ -735,12 +1013,23 @@ char* Instructions[] = {
                "                                   ",
                "                                   ",
                "               5                   ",
-#ifdef NET_ENABLED
+#ifdef BLAZERX
                "TO PLAY OVER A LAN, THE GAME USES  ",
                "IPX - THE SAME PROTOCOL CLASSIC DOS",
                "GAMES USED. NO PHONE NUMBER, COMM  ",
                "PORT, OR MODEM SETUP IS NEEDED.    ",
+#else
+               "TO PLAY MODEM-2-MODEM, YOU CAN     ",
+               "EITHER DIAL UP A COMPETITOR OR WAIT",
+               "FOR A COMPETITOR TO CALL. HOWEVER, ",
+               "BEFORE YOU CAN DO THIS, YOU MUST   ",
+               "SELECT WHICH COMMUNICATIONS PORT   ",
+               "YOUR MODEM IS ON. THIS CAN BE DONE ",
+               "WITH THE SELECT COMM PORT MENU     ",
+               "OPTION.                            ",
+#endif
                "                                   ",
+#ifdef BLAZERX
                "ONE PLAYER PICKS WAIT FOR          ",
                "CONNECTION; THE OTHER PICKS MAKE   ",
                "CONNECTION. THE NUMBER PROMPT IS   ",
@@ -753,15 +1042,6 @@ char* Instructions[] = {
                "THIS MODE.                         ",
                "                                   ",
 #else
-               "TO PLAY MODEM-2-MODEM, YOU CAN     ",
-               "EITHER DIAL UP A COMPETITOR OR WAIT",
-               "FOR A COMPETITOR TO CALL. HOWEVER, ",
-               "BEFORE YOU CAN DO THIS, YOU MUST   ",
-               "SELECT WHICH COMMUNICATIONS PORT   ",
-               "YOUR MODEM IS ON. THIS CAN BE DONE ",
-               "WITH THE SELECT COMM PORT MENU     ",
-               "OPTION.                            ",
-               "                                   ",
                "ONCE YOU HAVE SELECTED THE COMM    ",
                "PORT THEN EITHER DIAL UP A         ",
                "COMPETITOR WITH THE MAKE CONNECTION",
@@ -895,6 +1175,20 @@ int getLine(char* buffer) {
                 buffer[index] = ch;
                 buffer[index + 1] = 0;
 
+#ifdef BLAZERX
+                fontEngine1(
+                    DISPLAY_X + 6, DISPLAY_Y + 6 + 26,
+                    0,
+                    0,
+                    buffer, VideoBuffer);
+#else
+#ifdef VBE_SUPPORT
+                fontEngine1(
+                    DISPLAY_X + 4, DISPLAY_Y + 4 + 16,
+                    0,
+                    0,
+                    buffer, VideoBuffer);
+#else
                 fontEngine1(
                     DISPLAY_X + 2,
                     DISPLAY_Y + 2 + 8,
@@ -902,6 +1196,8 @@ int getLine(char* buffer) {
                     0,
                     buffer,
                     VideoBuffer);
+#endif
+#endif
 
                 // test if end of line reached
                 if (++index == 12) {
@@ -922,6 +1218,20 @@ int getLine(char* buffer) {
                 buffer[index] = ' ';
                 buffer[index + 1] = 0;
 
+#ifdef BLAZERX
+                fontEngine1(
+                    DISPLAY_X + 6, DISPLAY_Y + 6 + 26,
+                    0,
+                    0,
+                    buffer, VideoBuffer);
+#else
+#ifdef VBE_SUPPORT
+                fontEngine1(
+                    DISPLAY_X + 4, DISPLAY_Y + 4 + 16,
+                    0,
+                    0,
+                    buffer, VideoBuffer);
+#else
                 fontEngine1(
                     DISPLAY_X + 2,
                     DISPLAY_Y + 2 + 8,
@@ -929,6 +1239,8 @@ int getLine(char* buffer) {
                     0,
                     buffer,
                     VideoBuffer);
+#endif
+#endif
 
                 buffer[index] = 0;
 
@@ -964,7 +1276,12 @@ void initNovas(void) {
             Novas[indexN].cinders[indexC].sy = 0;
 
             Novas[indexN].cinders[indexC].color = 0;
+#ifdef VBE_SUPPORT
+            memset(Novas[indexN].cinders[indexC].backColor, 0,
+                   sizeof(Novas[indexN].cinders[indexC].backColor));
+#else
             Novas[indexN].cinders[indexC].backColor = 0;
+#endif
 
             // set timing fields
             Novas[indexN].cinders[indexC].lifetime = 0;
@@ -974,6 +1291,78 @@ void initNovas(void) {
         }
     }
 }
+
+#ifdef BLAZERX
+void cameraPixelUnder(int sx, int sy, unsigned long* back) {
+    // a world pixel covers CAM_ZOOM x CAM_ZOOM screen pixels: save the screen
+    // block under a pixel-sized particle so it can be erased later
+    int cx, cy;
+
+    for (cy = 0; cy < CAM_ZOOM; cy++) {
+        for (cx = 0; cx < CAM_ZOOM; cx++) {
+            back[cy * CAM_ZOOM + cx] = readPixelDb(sx + cx, sy + cy);
+        }
+    }
+}
+
+void cameraPixelDraw(int sx, int sy, int color) {
+    // draw a pixel-sized particle as its CAM_ZOOM x CAM_ZOOM screen block
+    int cx, cy;
+
+    for (cy = 0; cy < CAM_ZOOM; cy++) {
+        for (cx = 0; cx < CAM_ZOOM; cx++) {
+            writePixelDb(sx + cx, sy + cy, color);
+        }
+    }
+}
+
+void cameraPixelErase(int sx, int sy, const unsigned long* back) {
+    // restore the screen block saved by cameraPixelUnder
+    int cx, cy;
+
+    for (cy = 0; cy < CAM_ZOOM; cy++) {
+        for (cx = 0; cx < CAM_ZOOM; cx++) {
+            writePixelDb(sx + cx, sy + cy, back[cy * CAM_ZOOM + cx]);
+        }
+    }
+}
+#else
+#ifdef VBE_SUPPORT
+void cameraPixelUnder(int sx, int sy, unsigned char* back) {
+    // a world pixel covers CAM_ZOOM x CAM_ZOOM screen pixels: save the screen
+    // block under a pixel-sized particle so it can be erased later
+    int cx, cy;
+
+    for (cy = 0; cy < CAM_ZOOM; cy++) {
+        for (cx = 0; cx < CAM_ZOOM; cx++) {
+            back[cy * CAM_ZOOM + cx] = readPixelDb(sx + cx, sy + cy);
+        }
+    }
+}
+
+void cameraPixelDraw(int sx, int sy, int color) {
+    // draw a pixel-sized particle as its CAM_ZOOM x CAM_ZOOM screen block
+    int cx, cy;
+
+    for (cy = 0; cy < CAM_ZOOM; cy++) {
+        for (cx = 0; cx < CAM_ZOOM; cx++) {
+            writePixelDb(sx + cx, sy + cy, color);
+        }
+    }
+}
+
+void cameraPixelErase(int sx, int sy, const unsigned char* back) {
+    // restore the screen block saved by cameraPixelUnder
+    int cx, cy;
+
+    for (cy = 0; cy < CAM_ZOOM; cy++) {
+        for (cx = 0; cx < CAM_ZOOM; cx++) {
+            writePixelDb(sx + cx, sy + cy, back[cy * CAM_ZOOM + cx]);
+        }
+    }
+}
+#endif
+#endif
 
 void eraseNovas(void) {
     // this function replaces the what was under the novas
@@ -991,10 +1380,17 @@ void eraseNovas(void) {
             for (indexC = 0; indexC < NUM_CINDERS; indexC++) {
                 // is this cinder visible?
                 if (bits[indexC].visible) {
+#ifdef VBE_SUPPORT
+                    cameraPixelErase(
+                        bits[indexC].sx,
+                        bits[indexC].sy,
+                        bits[indexC].backColor);
+#else
                     writePixelDb(
                         bits[indexC].sx,
                         bits[indexC].sy,
                         bits[indexC].backColor);
+#endif
                 }
             }
         }
@@ -1012,8 +1408,13 @@ void underNovas(void) {
     ParticlePtr bits;
 
     // compute starting position of players window so screen mapping can be done
+#ifdef VBE_SUPPORT
+    pxWindow = PlayersX - VIEW_WIDTH / 2 + SHIP_WIDTH / 2;
+    pyWindow = PlayersY - VIEW_HEIGHT / 2 + SHIP_HEIGHT / 2;
+#else
     pxWindow = PlayersX - 160 + 11;
     pyWindow = PlayersY - 100 + 9;
+#endif
 
     // process each nova
     for (indexN = 0; indexN < NUM_NOVAS; indexN++) {
@@ -1023,6 +1424,26 @@ void underNovas(void) {
 
             // process each cinder
             for (indexC = 0; indexC < NUM_CINDERS; indexC++) {
+#ifdef VBE_SUPPORT
+                cx = bits[indexC].x - pxWindow;
+                cy = bits[indexC].y - pyWindow;
+
+                // test if cinder is visible on screen?
+                if (cx >= VIEW_WIDTH || cx < 0 || cy >= VIEW_HEIGHT || cy < 0) {
+                    // this cinder is invisible and has been clipped
+                    bits[indexC].visible = 0;
+
+                    // process next cinder
+                    continue;
+                }
+
+                // remap to screen coordinates
+                cx = bits[indexC].sx = cx * CAM_ZOOM;
+                cy = bits[indexC].sy = cy * CAM_ZOOM;
+
+                // scan under cinder
+                cameraPixelUnder(cx, cy, bits[indexC].backColor);
+#else
                 cx = bits[indexC].sx = bits[indexC].x - pxWindow;
                 cy = bits[indexC].sy = bits[indexC].y - pyWindow;
 
@@ -1037,6 +1458,7 @@ void underNovas(void) {
 
                 // scan under cinder
                 bits[indexC].backColor = readPixelDb(cx, cy);
+#endif
 
                 // set visibility flag
                 bits[indexC].visible = 1;
@@ -1044,6 +1466,17 @@ void underNovas(void) {
         }
     }
 }
+#ifdef BLAZERX
+
+// the cinder fire gradient CINDER_START_COLOR..CINDER_END_COLOR steps through,
+// pale red fading to dark orange
+static const unsigned long CinderColors[16] = {
+    RGB32(255,218,218), RGB32(255,186,186), RGB32(255,159,159), RGB32(255,127,127),
+    RGB32(255, 95, 95), RGB32(255, 64, 64), RGB32(255, 32, 32), RGB32(255,  0,  0),
+    RGB32(252,168, 92), RGB32(252,152, 64), RGB32(252,136, 32), RGB32(252,120,  0),
+    RGB32(228,108,  0), RGB32(204, 96,  0), RGB32(180, 84,  0), RGB32(156, 76,  0),
+};
+#endif
 
 void drawNovas(void) {
     // this function draws the novas
@@ -1061,10 +1494,24 @@ void drawNovas(void) {
             for (indexC = 0; indexC < NUM_CINDERS; indexC++) {
                 // is this cinder visible?
                 if (bits[indexC].visible) {
+#ifdef BLAZERX
+                    cameraPixelDraw(
+                        bits[indexC].sx,
+                        bits[indexC].sy,
+                        CinderColors[bits[indexC].color]);
+#else
+#ifdef VBE_SUPPORT
+                    cameraPixelDraw(
+                        bits[indexC].sx,
+                        bits[indexC].sy,
+                        bits[indexC].color);
+#else
                     writePixelDb(
                         bits[indexC].sx,
                         bits[indexC].sy,
                         bits[indexC].color);
+#endif
+#endif
                 }
             }
         }
@@ -1135,7 +1582,12 @@ void startNova(int x, int y) {
                 Novas[indexN].cinders[indexC].yv = -8 + rand() % 16;
 
                 Novas[indexN].cinders[indexC].color = CINDER_START_COLOR;
+#ifdef VBE_SUPPORT
+                memset(Novas[indexN].cinders[indexC].backColor, 0,
+                       sizeof(Novas[indexN].cinders[indexC].backColor));
+#else
                 Novas[indexN].cinders[indexC].backColor = 0;
+#endif
 
                 // set timing fields
                 Novas[indexN].cinders[indexC].counter = 0;
@@ -1152,29 +1604,116 @@ void startNova(int x, int y) {
 }
 
 void lineH2(int x1, int x2, int y, int color, unsigned char FAR* dest) {
+#ifdef BLAZERX
+    // draw a horizontal line into an arbitrary buffer (VideoBuffer or
+    // DoubleBuffer). black3/black4 only provide lineH for VideoBuffer
+    // itself, with no buffer-generic equivalent, so this writes pixels
+    // directly using the current mode's pitch, same as lineH internally.
+    int x, temp, bytespp = DisplayBpp / 8;
+    unsigned char FAR* p;
+
+    if (x1 > x2) {
+        temp = x1;
+        x1 = x2;
+        x2 = temp;
+    }
+    p = dest + (unsigned long)y * DisplayPitch + (unsigned long)x1 * bytespp;
+
+    for (x = x1; x <= x2; x++) {
+        switch (DisplayBpp) {
+            case 8:  *p = (unsigned char)color; break;
+            case 16: *(unsigned short FAR*)p = (unsigned short)color; break;
+            default: *(unsigned long FAR*)p  = (unsigned long)color; break;   // 32
+        }
+        p += bytespp;
+    }
+#else
+#ifdef VBE_SUPPORT
+    // draw a horizontal line to the destination buffer (always DoubleBuffer
+    // in this file) - black3/black4 only expose a generic-buffer HLine at
+    // the pixel level (writePixelDb), not a run-fill one, so this fills the
+    // row directly the way the book's own lineH2 always has
+    MEMSET(
+        (char FAR*)(dest + (long)y * DisplayPitch + x1),
+        (unsigned char)color,
+        x2 - x1 + 1);
+#else
     // draw a horizontal line to the destination buffer
     MEMSET(
         (char FAR*)(dest + ((y << 8) + (y << 6)) + x1),
         (unsigned char)color,
         x2 - x1 + 1);
+#endif
+#endif
 }
 
 void lineV2(int y1, int y2, int x, int color, unsigned char FAR* dest) {
+#ifdef BLAZERX
+    // draw a vertical line into an arbitrary buffer - see lineH2
+    int y, temp, bytespp = DisplayBpp / 8;
+    unsigned char FAR* p;
+#else
     // draw a vertical line to destination buffer
     unsigned char FAR* startOffset; // starting memory offset of line
     int index;
+#endif
 
+#ifdef BLAZERX
+    if (y1 > y2) {
+        temp = y1;
+        y1 = y2;
+        y2 = temp;
+    }
+    p = dest + (unsigned long)y1 * DisplayPitch + (unsigned long)x * bytespp;
+#else
     // compute starting position
+#ifdef VBE_SUPPORT
+    startOffset = dest + (long)y1 * DisplayPitch + x;
+#else
     startOffset = dest + ((y1 << 8) + (y1 << 6)) + x;
+#endif
+#endif
 
+#ifdef BLAZERX
+    for (y = y1; y <= y2; y++) {
+        switch (DisplayBpp) {
+            case 8:  *p = (unsigned char)color; break;
+            case 16: *(unsigned short FAR*)p = (unsigned short)color; break;
+            default: *(unsigned long FAR*)p  = (unsigned long)color; break;   // 32
+        }
+        p += DisplayPitch;
+#else
     for (index = 0; index <= y2 - y1; index++) {
         // set the pixel
         *startOffset = (unsigned char)color;
 
         // move downward to next line
+#ifdef VBE_SUPPORT
+        startOffset += DisplayPitch;
+#else
         startOffset += 320;
+#endif
+#endif
     }
 }
+
+#ifdef VBE_SUPPORT
+void lineH2Thick(int x1, int x2, int y, int thickness, int color, unsigned char FAR* dest) {
+    // draw a horizontal line thickness rows tall, centered on y
+    int i;
+    for (i = 0; i < thickness; i++) {
+        lineH2(x1, x2, y - thickness / 2 + i, color, dest);
+    }
+}
+
+void lineV2Thick(int y1, int y2, int x, int thickness, int color, unsigned char FAR* dest) {
+    // draw a vertical line thickness columns wide, centered on x
+    int i;
+    for (i = 0; i < thickness; i++) {
+        lineV2(y1, y2, x - thickness / 2 + i, color, dest);
+    }
+}
+#endif
 
 void initStars(void) {
     // this function initializes all the stars in the star field
@@ -1202,10 +1741,18 @@ void initStars(void) {
                 break;
         }
 
+#ifdef VBE_SUPPORT
+        // set fields that aren't plane specific (in view units, same scale as
+        // VIEW_WIDTH/VIEW_HEIGHT - screen position is only computed at draw time)
+        Stars[index].x = rand() % VIEW_WIDTH;  // change this latter to reflect clipping region
+        Stars[index].y = rand() % VIEW_HEIGHT;
+        memset(Stars[index].backColor, 0, sizeof(Stars[index].backColor));
+#else
         // set fields that aren't plane specific
         Stars[index].x = rand() % 320;  // change this latter to reflect clipping region
         Stars[index].y = rand() % 200;
         Stars[index].backColor = 0;
+#endif
     }
 }
 
@@ -1264,6 +1811,19 @@ void moveStars(void) {
         }
 
         // test if a star has flown off an edge
+#ifdef VBE_SUPPORT
+        if (starX >= VIEW_WIDTH) {
+            starX = starX - VIEW_WIDTH;
+        } else if (starX < 0) {
+            starX = VIEW_WIDTH + starX;
+        }
+
+        if (starY >= VIEW_HEIGHT) {
+            starY = starY - VIEW_HEIGHT;
+        } else if (starY < 0) {
+            starY = VIEW_HEIGHT + starY;
+        }
+#else
         if (starX >= 320) {
             starX = starX - 320;
         } else if (starX < 0) {
@@ -1275,6 +1835,7 @@ void moveStars(void) {
         } else if (starY < 0) {
             starY = 200 + starY;
         }
+#endif
 
         // reset stars position in structure
         Stars[index].x = starX;
@@ -1287,7 +1848,11 @@ void drawStars(void) {
     int index;
 
     for (index = 0; index < NUM_STARS; index++) {
+#ifdef VBE_SUPPORT
+        cameraPixelDraw(Stars[index].x * CAM_ZOOM, Stars[index].y * CAM_ZOOM, Stars[index].color);
+#else
         writePixelDb(Stars[index].x, Stars[index].y, Stars[index].color);
+#endif
     }
 }
 
@@ -1296,7 +1861,11 @@ void eraseStars(void) {
     int index;
 
     for (index = 0; index < NUM_STARS; index++) {
+#ifdef VBE_SUPPORT
+        cameraPixelErase(Stars[index].x * CAM_ZOOM, Stars[index].y * CAM_ZOOM, Stars[index].backColor);
+#else
         writePixelDb(Stars[index].x, Stars[index].y, Stars[index].backColor);
+#endif
     }
 }
 
@@ -1305,7 +1874,11 @@ void underStars(void) {
     int index;
 
     for (index = 0; index < NUM_STARS; index++) {
+#ifdef VBE_SUPPORT
+        cameraPixelUnder(Stars[index].x * CAM_ZOOM, Stars[index].y * CAM_ZOOM, Stars[index].backColor);
+#else
         Stars[index].backColor = readPixelDb(Stars[index].x, Stars[index].y);
+#endif
     }
 }
 
@@ -1324,14 +1897,22 @@ void initAsteroids(int small, int medium, int large) {
                 &Asteroids[index].rock,
                 0,
                 0,
+#ifdef VBE_SUPPORT
+                ASTEROID_LARGE_WIDTH * CAM_ZOOM,
+                ASTEROID_LARGE_HEIGHT * CAM_ZOOM,
+#else
                 ASTEROID_LARGE_WIDTH,
                 ASTEROID_LARGE_HEIGHT,
+#endif
                 0,
                 0,
                 0,
                 0,
                 0,
                 0);
+#ifdef BLAZERX
+            Asteroids[index].rock.transparentColor = SPRITE_TRANSPARENT_COLOR;
+#endif
         }
 
         // set position, velocity and type fields
@@ -1353,14 +1934,22 @@ void initAsteroids(int small, int medium, int large) {
                 &Asteroids[index].rock,
                 0,
                 0,
+#ifdef VBE_SUPPORT
+                ASTEROID_MEDIUM_WIDTH * CAM_ZOOM,
+                ASTEROID_MEDIUM_HEIGHT * CAM_ZOOM,
+#else
                 ASTEROID_MEDIUM_WIDTH,
                 ASTEROID_MEDIUM_HEIGHT,
+#endif
                 0,
                 0,
                 0,
                 0,
                 0,
                 0);
+#ifdef BLAZERX
+            Asteroids[index].rock.transparentColor = SPRITE_TRANSPARENT_COLOR;
+#endif
         }
 
         // set velocity and type fields
@@ -1382,14 +1971,22 @@ void initAsteroids(int small, int medium, int large) {
                 &Asteroids[index].rock,
                 0,
                 0,
+#ifdef VBE_SUPPORT
+                ASTEROID_SMALL_WIDTH * CAM_ZOOM,
+                ASTEROID_SMALL_HEIGHT * CAM_ZOOM,
+#else
                 ASTEROID_SMALL_WIDTH,
                 ASTEROID_SMALL_HEIGHT,
+#endif
                 0,
                 0,
                 0,
                 0,
                 0,
                 0);
+#ifdef BLAZERX
+            Asteroids[index].rock.transparentColor = SPRITE_TRANSPARENT_COLOR;
+#endif
         }
 
         // set velocity and type fields
@@ -1636,8 +2233,13 @@ void underAsteroids(void) {
         pyWindow;
 
     // compute starting position of player's window so screen mapping can be done
+#ifdef VBE_SUPPORT
+    pxWindow = PlayersX - VIEW_WIDTH / 2 + SHIP_WIDTH / 2;
+    pyWindow = PlayersY - VIEW_HEIGHT / 2 + SHIP_HEIGHT / 2;
+#else
     pxWindow = PlayersX - 160 + 11;
     pyWindow = PlayersY - 100 + 9;
+#endif
 
     // now scan under all asteroids
     for (index = 0; index < NUM_ASTEROIDS; index++) {
@@ -1646,8 +2248,13 @@ void underAsteroids(void) {
             // position asteroid correctly on view screen, note this is very similar
             // to what we will do in 3-D when we translate all the objects in the
             // universe to the viewer position
+#ifdef VBE_SUPPORT
+            Asteroids[index].rock.x = (Asteroids[index].x - pxWindow) * CAM_ZOOM;
+            Asteroids[index].rock.y = (Asteroids[index].y - pyWindow) * CAM_ZOOM;
+#else
             Asteroids[index].rock.x = Asteroids[index].x - pxWindow;
             Asteroids[index].rock.y = Asteroids[index].y - pyWindow;
+#endif
 
             spriteUnderClip(&Asteroids[index].rock, DoubleBuffer);
         }
@@ -1704,8 +2311,13 @@ void moveAsteroids(void) {
                 // test for collision
                 if (PlayersX + SHIP_WIDTH / 2  >= astX &&
                     PlayersY + SHIP_HEIGHT / 2 >= astY &&
+#ifdef VBE_SUPPORT
+                    PlayersX + SHIP_WIDTH / 2  <= astX + Asteroids[index].rock.width / CAM_ZOOM &&
+                    PlayersY + SHIP_HEIGHT / 2 <= astY + Asteroids[index].rock.height / CAM_ZOOM) {
+#else
                     PlayersX + SHIP_WIDTH / 2  <= astX + Asteroids[index].rock.width &&
                     PlayersY + SHIP_HEIGHT / 2 <= astY + Asteroids[index].rock.height) {
+#endif
 
                     // kill the asteroid and the missile
                     Asteroids[index].rock.state = ASTEROID_INACTIVE;
@@ -1762,11 +2374,20 @@ void moveAsteroids(void) {
                 }
 
                 // test for collision
+#ifdef BLAZERX
                 if (Linked || AiEnabled) {
+#else
+                if (Linked) {
+#endif
                     if (RemotesX + SHIP_WIDTH / 2  >= astX &&
                         RemotesY + SHIP_HEIGHT / 2 >= astY &&
+#ifdef VBE_SUPPORT
+                        RemotesX + SHIP_WIDTH / 2  <= astX + Asteroids[index].rock.width / CAM_ZOOM &&
+                        RemotesY + SHIP_HEIGHT / 2 <= astY + Asteroids[index].rock.height / CAM_ZOOM) {
+#else
                         RemotesX + SHIP_WIDTH / 2  <= astX + Asteroids[index].rock.width &&
                         RemotesY + SHIP_HEIGHT / 2 <= astY + Asteroids[index].rock.height) {
+#endif
 
                         // kill the asteroid and the missile
                         Asteroids[index].rock.state = ASTEROID_INACTIVE;
@@ -1851,7 +2472,15 @@ void techPrint(int x, int y, char* string, unsigned char FAR* destination) {
         fontEngine1(x, y, 0, 0, buffer, destination);
 
         // move to next position
+#ifdef BLAZERX
+        x += TECH_FONT_WIDTH + 3;
+#else
+#ifdef VBE_SUPPORT
+        x += TECH_FONT_WIDTH + 2;
+#else
         x += TECH_FONT_WIDTH + 1;
+#endif
+#endif
 
         // wait a bit 1/70th of a second
         waitForVerticalRetrace();
@@ -1897,7 +2526,7 @@ void fontEngine1(int x, int y, int font, int color, char* string, unsigned char 
             TechFont[index].x = 1 + (index % 16) * (TECH_FONT_WIDTH + 1);
             TechFont[index].y = 1 + (index / 16) * (TECH_FONT_HEIGHT + 1);
 
-            bitmapGet(&TechFont[index], ImagePcx.buffer);
+            bitmapGet(&TechFont[index], &ImagePcx);
         }
 
         // font is loaded, delete pcx file and set flag
@@ -1923,7 +2552,15 @@ void fontEngine1(int x, int y, int font, int color, char* string, unsigned char 
             bitmapPut(&TechFont[cIndex], destination, 0);
 
             // move to next character position
+#ifdef BLAZERX
+            x += TECH_FONT_WIDTH + 3;
+#else
+#ifdef VBE_SUPPORT
+            x += TECH_FONT_WIDTH + 2;
+#else
             x += TECH_FONT_WIDTH + 1;
+#endif
+#endif
         }
     }
 }
@@ -1965,15 +2602,45 @@ void closingScreen(void) {
     // blank screen
     fillScreen(0);
 
+#ifndef BLAZERX
     // restore palette
     writePalette(&GamePalette);
 
+#endif
     if (MusicEnabled) {
         musicStop();
         musicPlay(&Song, 10);
     }
 
     // draw the credits
+#ifdef BLAZERX
+    techPrint(32, 160, "MUSICAL MASTERY BY", VideoBuffer);
+    timeDelay(20);
+    techPrint(64, 192, "DEAN HUDSON OF", VideoBuffer);
+    timeDelay(20);
+    techPrint(96, 224, "ECLIPSE PRODUCTIONS", VideoBuffer);
+    timeDelay(20);
+
+    techPrint(32, 320, "MIDPAK INSTRUMENTATION CONSULTING BY", VideoBuffer);
+    timeDelay(20);
+    techPrint(64, 352, "ROB WALLACE OF", VideoBuffer);
+    timeDelay(20);
+    techPrint(96, 384, "WALLACE MUSIC & SOUND", VideoBuffer);
+#else
+#ifdef VBE_SUPPORT
+    techPrint(20, 100, "MUSICAL MASTERY BY", VideoBuffer);
+    timeDelay(20);
+    techPrint(40, 120, "DEAN HUDSON OF", VideoBuffer);
+    timeDelay(20);
+    techPrint(60, 140, "ECLIPSE PRODUCTIONS", VideoBuffer);
+    timeDelay(20);
+
+    techPrint(20, 200, "MIDPAK INSTRUMENTATION CONSULTING BY", VideoBuffer);
+    timeDelay(20);
+    techPrint(40, 220, "ROB WALLACE OF", VideoBuffer);
+    timeDelay(20);
+    techPrint(60, 240, "WALLACE MUSIC & SOUND", VideoBuffer);
+#else
     techPrint(10, 50, "MUSICAL MASTERY BY", VideoBuffer);
     timeDelay(20);
     techPrint(20, 60, "DEAN HUDSON OF", VideoBuffer);
@@ -1986,6 +2653,8 @@ void closingScreen(void) {
     techPrint(20, 110, "ROB WALLACE OF", VideoBuffer);
     timeDelay(20);
     techPrint(30, 120, "WALLACE MUSIC & SOUND", VideoBuffer);
+#endif
+#endif
 
     // wait a sec
     timeDelay(125);
@@ -2050,9 +2719,18 @@ void introBriefing(void) {
     // delete pcx file
     pcxDelete(&ImageControls);
 
-    // display the first page
+    // display the first page (under BLAZERX, positions * 1024/640, 768/480 -
+    // blazeins.pcx was rescaled by the same factor)
     for (index = 0; index < NUM_LINES_PAGE; index++) {
+#ifdef BLAZERX
+        fontEngine1(250, 93 + index * 30, 0, 0, Instructions[index + page * 17], VideoBuffer);
+#else
+#ifdef VBE_SUPPORT
+        fontEngine1(156, 58 + index * 19, 0, 0, Instructions[index + page * 17], VideoBuffer);
+#else
         fontEngine1(78, 24 + index * 8, 0, 0, Instructions[index + page * 17], VideoBuffer);
+#endif
+#endif
     }
 
     // enter main event loop
@@ -2066,8 +2744,18 @@ void introBriefing(void) {
                 }
 
                 // press button
+#ifdef BLAZERX
+                Button3.x = 592;
+                Button3.y = 653;
+#else
+#ifdef VBE_SUPPORT
+                Button3.x = 370;
+                Button3.y = 408;
+#else
                 Button3.x = 185;
                 Button3.y = 170;
+#endif
+#endif
                 Button3.currFrame = 3;
 
                 spriteDraw(&Button3, VideoBuffer, 1);
@@ -2088,8 +2776,18 @@ void introBriefing(void) {
                 }
 
                 // press button
+#ifdef BLAZERX
+                Button3.x = 339;
+                Button3.y = 653;
+#else
+#ifdef VBE_SUPPORT
+                Button3.x = 212;
+                Button3.y = 408;
+#else
                 Button3.x = 106;
                 Button3.y = 170;
+#endif
+#endif
                 Button3.currFrame = 1;
 
                 spriteDraw(&Button3, VideoBuffer, 1);
@@ -2109,12 +2807,24 @@ void introBriefing(void) {
 
             // refresh display
             for (index = 0; index < NUM_LINES_PAGE; index++) {
+#ifdef BLAZERX
+                fontEngine1(250, 93 + index * 30, 0, 0, Instructions[index + page * 17], VideoBuffer);
+#else
+#ifdef VBE_SUPPORT
+                fontEngine1(156, 58 + index * 19, 0, 0, Instructions[index + page * 17], VideoBuffer);
+#else
                 fontEngine1(78, 24 + index * 8, 0, 0, Instructions[index + page * 17], VideoBuffer);
+#endif
+#endif
             }
         }
 
         // do the scrolling lite thing
+#ifdef BLAZERX
+        panelFx(PANEL_FX_BRIEFING);
+#else
         panelFx();
+#endif
 
         // wait a sec
         timeDelay(1);
@@ -2133,7 +2843,15 @@ void loadExplosions(void) {
     // load each explosion in
     for (index = 0; index < NUM_EXPLOSIONS; index++) {
         // initialize each sprite
+#ifdef VBE_SUPPORT
+        spriteInit(&Explosions[index], 0, 0,
+                       EXPLOSION_WIDTH * CAM_ZOOM, EXPLOSION_HEIGHT * CAM_ZOOM, 0, 0, 0, 0, 0, 0);
+#else
         spriteInit(&Explosions[index], 0, 0, 28, 22, 0, 0, 0, 0, 0, 0);
+#endif
+#ifdef BLAZERX
+        Explosions[index].transparentColor = SPRITE_TRANSPARENT_COLOR;
+#endif
 
         // extract the animation frames
         for (frames = 0; frames <= NUM_EXPLOSION_FRAMES; frames++) {
@@ -2154,7 +2872,16 @@ void loadIcons(void) {
     pcxLoad("blazebt1.pcx", &ImagePcx, 1);
 
     // initialize the button sprite
+#ifdef BLAZERX
+    spriteInit(&Button1, 346, 242, 32, 26, 0, 0, 0, 0, 0, 0); // pos: (236-20, 151); size: (20,16) * 1024/640, 768/480
+    Button1.transparentColor = SPRITE_TRANSPARENT_COLOR;
+#else
+#ifdef VBE_SUPPORT
+    spriteInit(&Button1, 236 - 20, 151, 20, 16, 0, 0, 0, 0, 0, 0);
+#else
     spriteInit(&Button1, 118 - 10, 63, 10, 8, 0, 0, 0, 0, 0, 0);
+#endif
+#endif
 
     Button1.counter1 = 0;   // button is on the 0th element in the list
 
@@ -2166,7 +2893,16 @@ void loadIcons(void) {
     // load in display selection buttons
 
     // initialize the button sprite
+#ifdef BLAZERX
+    spriteInit(&Button2, 0, DISPLAY_Y + DISPLAY_HEIGHT - 19, 32, 26, 0, 0, 0, 0, 0, 0);
+    Button2.transparentColor = SPRITE_TRANSPARENT_COLOR;
+#else
+#ifdef VBE_SUPPORT
+    spriteInit(&Button2, 0, DISPLAY_Y + DISPLAY_HEIGHT - 12, 20, 16, 0, 0, 0, 0, 0, 0);
+#else
     spriteInit(&Button2, 0, DISPLAY_Y + DISPLAY_HEIGHT - 6, 10, 8, 0, 0, 0, 0, 0, 0);
+#endif
+#endif
 
     // extract the bitmaps for the button, there are 2 animation cells
     for (index = 0; index < 2; index++) {
@@ -2181,7 +2917,16 @@ void loadIcons(void) {
     pcxLoad("blazebt3.pcx", &ImagePcx, 1);
 
     // initialize the button sprite
+#ifdef BLAZERX
+    spriteInit(&Button3, 0, 0, 134, 38, 0, 0, 0, 0, 0, 0);
+    Button3.transparentColor = SPRITE_TRANSPARENT_COLOR;
+#else
+#ifdef VBE_SUPPORT
+    spriteInit(&Button3, 0, 0, 84, 24, 0, 0, 0, 0, 0, 0);
+#else
     spriteInit(&Button3, 0, 0, 42, 12, 0, 0, 0, 0, 0, 0);
+#endif
+#endif
 
     // extract the bitmaps for the button, there are 4 animation cells
     for (index = 0; index < 4; index++) {
@@ -2196,7 +2941,16 @@ void loadIcons(void) {
     pcxLoad("blazedis.pcx", &ImagePcx, 1);
 
     // initialize the display sprite
+#ifdef BLAZERX
+    spriteInit(&Displays, DISPLAY_X, DISPLAY_Y + 19, 230, 64, 0, 0, 0, 0, 0, 0);
+    Displays.transparentColor = SPRITE_TRANSPARENT_COLOR;
+#else
+#ifdef VBE_SUPPORT
+    spriteInit(&Displays, DISPLAY_X, DISPLAY_Y + 12, 144, 40, 0, 0, 0, 0, 0, 0);
+#else
     spriteInit(&Displays, DISPLAY_X, DISPLAY_Y + 6, 72, 20, 0, 0, 0, 0, 0, 0);
+#endif
+#endif
 
     // extract the bitmaps for the display bitmaps, there are 2 images
     for (index = 0; index < 2; index++) {
@@ -2215,17 +2969,36 @@ void loadShips(void) {
     pcxLoad("blazeshl.pcx", &ImagePcx, 1);
 
     // load in the imagery for the local gryfon and raptor
+#ifdef VBE_SUPPORT
+    spriteInit(&GryfonL, 0, 0, SHIP_WIDTH * CAM_ZOOM, SHIP_HEIGHT * CAM_ZOOM, 0, 0, 0, 0, 0, 0);
+    spriteInit(&RaptorL, 0, 0, SHIP_WIDTH * CAM_ZOOM, SHIP_HEIGHT * CAM_ZOOM, 0, 0, 0, 0, 0, 0);
+#else
     spriteInit(&GryfonL, 0, 0, 22, 18, 0, 0, 0, 0, 0, 0);
     spriteInit(&RaptorL, 0, 0, 22, 18, 0, 0, 0, 0, 0, 0);
+#endif
+#ifdef BLAZERX
+    GryfonL.transparentColor = SPRITE_TRANSPARENT_COLOR;
+    RaptorL.transparentColor = SPRITE_TRANSPARENT_COLOR;
+#endif
 
     // there are 32 animation cells per ship
     for (index = 0; index < 16; index++) {
+#ifdef BLAZERX
+        pcxGetSpriteTinted(&ImagePcx, &GryfonL, index, index % 12, index / 12, PlayersTintKeys, 2);
+        pcxGetSpriteTinted(&ImagePcx, &RaptorL, index, index % 12, 2 + index / 12, PlayersTintKeys, 2);
+#else
         pcxGetSprite(&ImagePcx, &GryfonL, index, index % 12, index / 12);
         pcxGetSprite(&ImagePcx, &RaptorL, index, index % 12, 2 + index / 12);
+#endif
 
         // these frames are with engines on
+#ifdef BLAZERX
+        pcxGetSpriteTinted(&ImagePcx, &GryfonL, index + 16, index % 12, 4 + index / 12, PlayersTintKeys, 2);
+        pcxGetSpriteTinted(&ImagePcx, &RaptorL, index + 16, index % 12, 4 + 2 + index / 12, PlayersTintKeys, 2);
+#else
         pcxGetSprite(&ImagePcx, &GryfonL, index + 16, index % 12, 4 + index / 12);
         pcxGetSprite(&ImagePcx, &RaptorL, index + 16, index % 12, 4 + 2 + index / 12);
+#endif
     }
 
     pcxDelete(&ImagePcx);
@@ -2234,25 +3007,60 @@ void loadShips(void) {
     pcxInit(&ImagePcx);
     pcxLoad("blazeshr.pcx", &ImagePcx, 1);
 
+#ifdef VBE_SUPPORT
+    spriteInit(&GryfonR, 0, 0, SHIP_WIDTH * CAM_ZOOM, SHIP_HEIGHT * CAM_ZOOM, 0, 0, 0, 0, 0, 0);
+    spriteInit(&RaptorR, 0, 0, SHIP_WIDTH * CAM_ZOOM, SHIP_HEIGHT * CAM_ZOOM, 0, 0, 0, 0, 0, 0);
+#else
     spriteInit(&GryfonR, 0, 0, 22, 18, 0, 0, 0, 0, 0, 0);
     spriteInit(&RaptorR, 0, 0, 22, 18, 0, 0, 0, 0, 0, 0);
+#endif
+#ifdef BLAZERX
+    GryfonR.transparentColor = SPRITE_TRANSPARENT_COLOR;
+    RaptorR.transparentColor = SPRITE_TRANSPARENT_COLOR;
+#endif
 
     // there are 32 animation cells per ship
     for (index = 0; index < 16; index++) {
+#ifdef BLAZERX
+        pcxGetSpriteTinted(&ImagePcx, &GryfonR, index, index % 12, index / 12, RemotesTintKeys, 2);
+        pcxGetSpriteTinted(&ImagePcx, &RaptorR, index, index % 12, 2 + index / 12, RemotesTintKeys, 2);
+#else
         pcxGetSprite(&ImagePcx, &GryfonR, index, index % 12, index / 12);
         pcxGetSprite(&ImagePcx, &RaptorR, index, index % 12, 2 + index / 12);
+#endif
 
         // these frames are with engines on
+#ifdef BLAZERX
+        pcxGetSpriteTinted(&ImagePcx, &GryfonR, index + 16, index % 12, 4 + index / 12, RemotesTintKeys, 2);
+        pcxGetSpriteTinted(&ImagePcx, &RaptorR, index + 16, index % 12, 4 + 2  + index / 12, RemotesTintKeys, 2);
+#else
         pcxGetSprite(&ImagePcx, &GryfonR, index + 16, index % 12, 4 + index / 12);
         pcxGetSprite(&ImagePcx, &RaptorR, index + 16, index % 12, 4 + 2  + index / 12);
+#endif
     }
 
     // initialize the player and remote sprites
+#ifdef VBE_SUPPORT
+    spriteInit(&PlayersShip,
+                   (VIEW_WIDTH / 2 - SHIP_WIDTH / 2) * CAM_ZOOM,
+                   (VIEW_HEIGHT / 2 - SHIP_HEIGHT / 2) * CAM_ZOOM,
+                   SHIP_WIDTH * CAM_ZOOM, SHIP_HEIGHT * CAM_ZOOM, 0, 0, 0, 0, 0, 0);
+    spriteInit(&RemotesShip, 0, 0, SHIP_WIDTH * CAM_ZOOM, SHIP_HEIGHT * CAM_ZOOM, 0, 0, 0, 0, 0, 0);
+
+    // initialize the starburst
+    spriteInit(&Starburst, 0, 0, SHIP_WIDTH * CAM_ZOOM, SHIP_HEIGHT * CAM_ZOOM, 0, 0, 0, 0, 0, 0);
+#else
     spriteInit(&PlayersShip, 160 - 11, 100 - 9, 22, 18, 0, 0, 0, 0, 0, 0);
     spriteInit(&RemotesShip, 0, 0, 22, 18, 0, 0, 0, 0, 0, 0);
 
     // initialize the starburst
     spriteInit(&Starburst, 0, 0, 22, 18, 0, 0, 0, 0, 0, 0);
+#endif
+#ifdef BLAZERX
+    PlayersShip.transparentColor = SPRITE_TRANSPARENT_COLOR;
+    RemotesShip.transparentColor = SPRITE_TRANSPARENT_COLOR;
+    Starburst.transparentColor = SPRITE_TRANSPARENT_COLOR;
+#endif
 
     // extract the bitmaps for the starburst, there are 6 animation cells
     for (index = 0; index < 6; index++) {
@@ -2270,8 +3078,18 @@ void doStarburst(void) {
 
     for (index = 0; index < number; index++) {
         // select position for starburst
+#ifdef BLAZERX
+        Starburst.x = 512 + rand() % 373;
+        Starburst.y = 307 + rand() % 40;
+#else
+#ifdef VBE_SUPPORT
+        Starburst.x = 320 + rand() % 244;
+        Starburst.y = 192 + rand() % 34;
+#else
         Starburst.x = 160 + rand() % 140;
         Starburst.y = 80 + rand() % 20;
+#endif
+#endif
 
         spriteUnder(&Starburst, VideoBuffer);
 
@@ -2292,7 +3110,15 @@ void doStarburst(void) {
 int displaySelect(int current) {
     // this function is used to select between two choices in the display window
     // compute starting position of selection icon based on default selection
+#ifdef BLAZERX
+    Button2.x = DISPLAY_X + 45 + current * 128;
+#else
+#ifdef VBE_SUPPORT
+    Button2.x = DISPLAY_X + 28 + current * 80;
+#else
     Button2.x = DISPLAY_X + 14 + current * 40;
+#endif
+#endif
 
     // scan under selection icon
     spriteUnder(&Button2, VideoBuffer);
@@ -2324,8 +3150,13 @@ int displaySelect(int current) {
                 clearDisplay(0);
 
                 fontEngine1(
+#ifdef BLAZERX
+                    DISPLAY_X + 3,
+                    DISPLAY_Y + 3,
+#else
                     DISPLAY_X + 2,
                     DISPLAY_Y + 2,
+#endif
                     0,
                     0,
                     "ABORTED...",
@@ -2358,13 +3189,31 @@ int displaySelect(int current) {
                 clearDisplay(0);
 
                 fontEngine1(
+#ifdef BLAZERX
+                    DISPLAY_X + 3,
+#else
                     DISPLAY_X + 2,
+#endif
                     DISPLAY_Y,
                     0,
                     0,
                     "SELECTION",
                     VideoBuffer);
 
+#ifdef BLAZERX
+                fontEngine1(
+                    DISPLAY_X + 6, DISPLAY_Y + 6 + 26,
+                    0,
+                    0,
+                    "RECORDED", VideoBuffer);
+#else
+#ifdef VBE_SUPPORT
+                fontEngine1(
+                    DISPLAY_X + 4, DISPLAY_Y + 4 + 16,
+                    0,
+                    0,
+                    "RECORDED", VideoBuffer);
+#else
                 fontEngine1(
                     DISPLAY_X + 2,
                     DISPLAY_Y + 2 + 8,
@@ -2372,6 +3221,8 @@ int displaySelect(int current) {
                     0,
                     "RECORDED",
                     VideoBuffer);
+#endif
+#endif
 
                 digitalFxPlay(BLZSEL_VOC, 1);
 
@@ -2387,7 +3238,15 @@ int displaySelect(int current) {
             spriteErase(&Button2, VideoBuffer);
 
             // compute x position
+#ifdef BLAZERX
+            Button2.x = DISPLAY_X + 45 + current * 128;
+#else
+#ifdef VBE_SUPPORT
+            Button2.x = DISPLAY_X + 28 + current * 80;
+#else
             Button2.x = DISPLAY_X + 14 + current * 40;
+#endif
+#endif
 
             // scan under and draw selection icon
             spriteUnder(&Button2, VideoBuffer);
@@ -2395,7 +3254,11 @@ int displaySelect(int current) {
         }
 
         // perform special effects
+#ifdef BLAZERX
+        panelFx(PANEL_FX_CONTROL);
+#else
         panelFx();
+#endif
 
         // wait a bit
         timeDelay(1);
@@ -2409,6 +3272,11 @@ void copyFrames(SpritePtr dest, SpritePtr source) {
     for (index = 0; index < source->numFrames; index++) {
         // assign next frame
         dest->frames[index] = source->frames[index];
+#ifdef BLAZERX
+
+        // carry over the shield/engine tint mask too, if this frame has one
+        dest->tintMask[index] = source->tintMask[index];
+#endif
     }
 
     // set up dest fields
@@ -2437,7 +3305,11 @@ void shieldControl(int ship, int on) {
         }
 
         // set the color
+#ifdef BLAZERX
+        PlayersTintColors[0] = vgaColorToRGB32(PlayersShieldColor);
+#else
         writeColorReg(PLAYERS_SHIELD_REG, &PlayersShieldColor);
+#endif
 
         // record shield change
         PlayersShields = on;
@@ -2462,7 +3334,11 @@ void shieldControl(int ship, int on) {
         }
 
         // set the color
+#ifdef BLAZERX
+        RemotesTintColors[0] = vgaColorToRGB32(RemotesShieldColor);
+#else
         writeColorReg(REMOTES_SHIELD_REG, &RemotesShieldColor);
+#endif
 
         // record shield change
         RemotesShields = on;
@@ -2476,7 +3352,11 @@ void eraseMissiles(void) {
     for (index = 0; index < NUM_MISSILES; index++) {
         // is this missile active and visible
         if (Missiles[index].state == MISS_ACTIVE && Missiles[index].visible) {
+#ifdef VBE_SUPPORT
+            cameraPixelErase(Missiles[index].sx, Missiles[index].sy, Missiles[index].backColor);
+#else
             writePixelDb(Missiles[index].sx, Missiles[index].sy, Missiles[index].backColor);
+#endif
         }
     }
 }
@@ -2490,12 +3370,37 @@ void underMissiles(void) {
         my;
 
     // compute starting position of players window so screen mapping can be done
+#ifdef VBE_SUPPORT
+    pxWindow = PlayersX - VIEW_WIDTH / 2 + SHIP_WIDTH / 2;
+    pyWindow = PlayersY - VIEW_HEIGHT / 2 + SHIP_HEIGHT / 2;
+#else
     pxWindow = PlayersX - 160 + 11;
     pyWindow = PlayersY - 100 + 9;
+#endif
 
     for (index = 0; index < NUM_MISSILES; index++) {
         // is this missile active
         if (Missiles[index].state == MISS_ACTIVE) {
+#ifdef VBE_SUPPORT
+            mx = Missiles[index].x - pxWindow;
+            my = Missiles[index].y - pyWindow;
+
+            // test if missile is visible on screen?
+            if (mx >= VIEW_WIDTH || mx < 0 || my >= VIEW_HEIGHT || my < 0) {
+                // this missile is invisible and has been clipped
+                Missiles[index].visible = 0;
+
+                // process next missile
+                continue;
+            }
+
+            // remap to screen coordinates
+            mx = Missiles[index].sx = mx * CAM_ZOOM;
+            my = Missiles[index].sy = my * CAM_ZOOM;
+
+            // scan under missile
+            cameraPixelUnder(mx, my, Missiles[index].backColor);
+#else
             // remap to screen coordinates
             mx = Missiles[index].sx = Missiles[index].x - pxWindow;
             my = Missiles[index].sy = Missiles[index].y - pyWindow;
@@ -2511,10 +3416,11 @@ void underMissiles(void) {
 
             // scan under missile
             Missiles[index].backColor = readPixelDb(mx, my);
+#endif
 
             // set visibility flag
             Missiles[index].visible = 1;
-        }        
+        }
     }
 }
 
@@ -2525,7 +3431,11 @@ void drawMissiles(void) {
     for (index = 0; index < NUM_MISSILES; index++) {
         // is this missile active and visible
         if (Missiles[index].state == MISS_ACTIVE && Missiles[index].visible) {
+#ifdef VBE_SUPPORT
+            cameraPixelDraw(Missiles[index].sx, Missiles[index].sy, Missiles[index].color);
+#else
             writePixelDb(Missiles[index].sx, Missiles[index].sy, Missiles[index].color);
+#endif
         }
     }
 }
@@ -2561,8 +3471,13 @@ void moveMissiles(void) {
                     // test for collision
                     if (missX >= Asteroids[aIndex].x &&
                         missY >= Asteroids[aIndex].y &&
+#ifdef VBE_SUPPORT
+                        missX <= Asteroids[aIndex].x + Asteroids[aIndex].rock.width / CAM_ZOOM &&
+                        missY <= Asteroids[aIndex].y + Asteroids[aIndex].rock.height / CAM_ZOOM) {
+#else
                         missX <= Asteroids[aIndex].x + Asteroids[aIndex].rock.width &&
                         missY <= Asteroids[aIndex].y + Asteroids[aIndex].rock.height) {
+#endif
 
                         // kill the asteroid and the missile
                         Asteroids[aIndex].rock.state = ASTEROID_INACTIVE;
@@ -2649,7 +3564,11 @@ void moveMissiles(void) {
             }
 
             // test if missiles hit local player
+#ifdef BLAZERX
             if ((Linked || AiEnabled) && PlayersState == ALIVE && Missiles[index].type == REMOTE_MISSILE) {
+#else
+            if (Linked && PlayersState == ALIVE && Missiles[index].type == REMOTE_MISSILE) {
+#endif
                 if (missX > PlayersX && missX < PlayersX + SHIP_WIDTH &&
                     missY > PlayersY && missY < PlayersY + SHIP_HEIGHT) {
 
@@ -2672,7 +3591,11 @@ void moveMissiles(void) {
             }
 
             // test if missile has hit remote player
+#ifdef BLAZERX
             if ((Linked || AiEnabled) && RemotesState == ALIVE && Missiles[index].type == PLAYER_MISSILE) {
+#else
+            if (Linked && RemotesState == ALIVE && Missiles[index].type == PLAYER_MISSILE) {
+#endif
                 if (missX > RemotesX && missX < RemotesX + SHIP_WIDTH &&
                     missY > RemotesY && missY < RemotesY + SHIP_HEIGHT) {
 
@@ -2738,7 +3661,11 @@ int startMissile(int x, int y, int xv, int yv, int color, int type) {
             Missiles[index].xv = xv;
             Missiles[index].yv = yv;
             Missiles[index].color = color;
+#ifdef VBE_SUPPORT
+            memset(Missiles[index].backColor, 0, sizeof(Missiles[index].backColor));
+#else
             Missiles[index].backColor = 0;
+#endif
             Missiles[index].type = type;
             Missiles[index].visible = 0;
             Missiles[index].lifetime = 30 + rand() % 10;
@@ -2808,6 +3735,7 @@ void startRemotesDeath(void) {
     RemotesCloak = -1;
     RemotesState = DYING;
     RemotesDeathCount = 48;
+#ifdef BLAZERX
 }
 
 int aiHeading(int vx, int vy) {
@@ -2871,11 +3799,12 @@ int computeRemoteAi(void) {
     // thrusts to correct the difference. Pacing the player's velocity makes it
     // glide on the player-locked screen and stops it building runaway momentum, so
     // it no longer spins / weaves / jerks. When its velocity already matches it
-    // faces the player and shoots - the common, calm case. The behavior states
-    // (HUNT / STRAFE / FLEE) just choose which maneuver velocity to aim for.
-    int dx, dy, dist, huntFrame, diffPlayer, diff, desiredFrame, keys, m, mdx, mdy;
+    // faces the firing solution and shoots - the common, calm case. The behavior
+    // states (HUNT / STRAFE / FLEE) just choose which maneuver velocity to aim for.
+    int dx, dy, dist, huntFrame, diff, desiredFrame, keys, m, mdx, mdy;
     int aiSees, returning, radial, tx, ty, mFrame;
     int relMx, relMy, targetVx, targetVy, errVx, errVy, errMag;
+    int aimT, fireFrame, diffFire, adx, ady, aDist, aNear;
 
     keys = 0;
 
@@ -2888,6 +3817,26 @@ int computeRemoteAi(void) {
     if (aiSees) {
         AiLastX = PlayersX;
         AiLastY = PlayersY;
+        AiLastVx = PlayersXv;
+        AiLastVy = PlayersYv;
+    } else {
+        // he's cloaked: coast a ghost along his last-seen velocity, so ducking
+        // under cloak and side-stepping no longer guarantees a clean escape -
+        // the enemy leads the spot instead of parking on it
+        AiLastX += AiLastVx;
+        AiLastY += AiLastVy;
+
+        if (AiLastX > UNIVERSE_WIDTH) {
+            AiLastX = AiLastX - UNIVERSE_WIDTH;
+        } else if (AiLastX < 0) {
+            AiLastX = AiLastX + UNIVERSE_WIDTH;
+        }
+
+        if (AiLastY > UNIVERSE_HEIGHT) {
+            AiLastY = AiLastY - UNIVERSE_HEIGHT;
+        } else if (AiLastY < 0) {
+            AiLastY = AiLastY + UNIVERSE_HEIGHT;
+        }
     }
 
     // vector from the remote to its target - the player if visible, otherwise
@@ -2910,10 +3859,19 @@ int computeRemoteAi(void) {
     // rough distance (Manhattan, avoids a square root)
     dist = (dx < 0 ? -dx : dx) + (dy < 0 ? -dy : dy);
 
-    // heading that points straight at the player - used for closing in and for
-    // deciding when a shot would actually connect
+    // heading that points straight at the player - used for closing in
     huntFrame = aiHeading(dx, dy);
-    diffPlayer = (huntFrame - RemotesShip.currFrame) & 15;
+
+    // The firing solution: aim where the player WILL be when the missile gets
+    // there, not where he is now. Relative to us the missile flies at ~6 units
+    // a frame (2x the ~3-unit heading vector), so flight time is about dist / 6;
+    // offset the aim by his velocity relative to ours over that time, then slip
+    // it by this shot's aim error so the enemy is dangerous, not surgical.
+    aimT = dist / 6;
+    fireFrame = aiHeading(dx + (AiLastVx - RemotesXv) * aimT,
+                          dy + (AiLastVy - RemotesYv) * aimT);
+    fireFrame = (fireFrame + AiAimSlip) & 15;
+    diffFire = (fireFrame - RemotesShip.currFrame) & 15;
 
     // tick the behavior timer and choose a new behavior when it expires, or
     // immediately when our energy runs low (so it stops bleeding power)
@@ -2973,9 +3931,43 @@ int computeRemoteAi(void) {
         }
     }
 
-    // target world velocity = the player's velocity (so we pace it) + the maneuver
-    targetVx = (aiSees ? PlayersXv : 0) + relMx;
-    targetVy = (aiSees ? PlayersYv : 0) + relMy;
+    // Asteroid avoidance overrides the maneuver: project our course a few
+    // frames ahead (and each rock's), and if the nearest rock falls inside its
+    // size plus a clearance band, steer straight away from it.
+    aNear = 32767;
+    tx = 0;
+    ty = 0;
+
+    for (m = 0; m < NUM_ASTEROIDS; m++) {
+        if (Asteroids[m].rock.state == ASTEROID_ACTIVE) {
+            adx = (Asteroids[m].x + Asteroids[m].xv * AI_AVOID_AHEAD
+                       + Asteroids[m].rock.width / (2 * CAM_ZOOM))
+                - (RemotesX + RemotesXv * AI_AVOID_AHEAD + SHIP_WIDTH / 2);
+            ady = (Asteroids[m].y + Asteroids[m].yv * AI_AVOID_AHEAD
+                       + Asteroids[m].rock.height / (2 * CAM_ZOOM))
+                - (RemotesY + RemotesYv * AI_AVOID_AHEAD + SHIP_HEIGHT / 2);
+
+            aDist = (adx < 0 ? -adx : adx) + (ady < 0 ? -ady : ady);
+
+            if (aDist < Asteroids[m].rock.width / CAM_ZOOM + AI_AVOID_RANGE &&
+                aDist < aNear) {
+                aNear = aDist;
+                tx = -adx;
+                ty = -ady;
+            }
+        }
+    }
+
+    if (aNear < 32767) {
+        mFrame = aiHeading(tx, ty);
+        relMx = MotionDx[mFrame] * AI_MANEUVER;
+        relMy = MotionDy[mFrame] * AI_MANEUVER;
+    }
+
+    // target world velocity = the player's velocity (so we pace it - or the
+    // ghost's, while he's cloaked) + the maneuver
+    targetVx = AiLastVx + relMx;
+    targetVy = AiLastVy + relMy;
 
     // how far our current velocity is from that target
     errVx = targetVx - RemotesXv;
@@ -2983,12 +3975,12 @@ int computeRemoteAi(void) {
     errMag = (errVx < 0 ? -errVx : errVx) + (errVy < 0 ? -errVy : errVy);
 
     // If we need to change velocity, face the correction and thrust toward it. If
-    // our velocity already matches, face the player so we can shoot - that's the
-    // usual case, and is what makes the movement look calm.
+    // our velocity already matches, face the firing solution so we can shoot -
+    // that's the usual case, and is what makes the movement look calm.
     if (errMag > AI_VEL_TOL) {
         desiredFrame = aiHeading(errVx, errVy);
     } else {
-        desiredFrame = huntFrame;
+        desiredFrame = fireFrame;
     }
 
     // rotate one step the short way toward the desired heading
@@ -3007,16 +3999,16 @@ int computeRemoteAi(void) {
         keys += REMOTE_THRUST;
     }
 
-    // Fire when it can see the player, isn't fleeing, is roughly facing the player
-    // (within one heading step), is in range, off cooldown, and has a shot slot
-    // and the energy to spare. A cloaked player can't be targeted.
+    // Fire when it can see the player, isn't fleeing, is roughly facing the
+    // firing solution (within one heading step), is in range, off cooldown, and
+    // has a shot slot and the energy to spare. A cloaked player can't be targeted.
     if (AiFireDelay > 0) {
         AiFireDelay--;
     }
 
     if (aiSees &&
         AiState != AI_FLEE &&
-        (diffPlayer == 0 || diffPlayer == 1 || diffPlayer == 15) &&
+        (diffFire == 0 || diffFire == 1 || diffFire == 15) &&
         dist < AI_FIRE_RANGE &&
         RemotesEnergy > 100 &&
         RemotesActiveMissiles < AI_MAX_MISSILES &&
@@ -3029,6 +4021,9 @@ int computeRemoteAi(void) {
         keys &= ~(REMOTE_LEFT | REMOTE_RIGHT);
 
         AiFireDelay = AI_FIRE_COOLDOWN + rand() % AI_FIRE_JITTER;
+
+        // roll the next shot's aim slip
+        AiAimSlip = rand() % (2 * AI_AIM_ERROR + 1) - AI_AIM_ERROR;
     }
 
     // Raise shields only for a player missile that is genuinely bearing down -
@@ -3061,7 +4056,23 @@ int computeRemoteAi(void) {
         }
     }
 
+    // The cloaking device: while FLEEing with energy to spare, cloak to break
+    // the player's lock and reposition; decloak once ready to fight again (or
+    // when energy runs low - the cloak bleeds power, and the sim's toggle is
+    // gated on energy > 0, so waiting too long would leave it stuck cloaked).
+    // The sim toggles on REMOTE_CLOAK, so press only when the state is wrong.
+    if (RemotesCloak == 1 &&
+        (AiState != AI_FLEE || RemotesEnergy < AI_LOW_ENERGY)) {
+        keys += REMOTE_CLOAK;
+    } else if (AiState == AI_FLEE &&
+               RemotesCloak == -1 &&
+               RemotesShields == 0 &&
+               RemotesEnergy > AI_CLOAK_ENERGY) {
+        keys += REMOTE_CLOAK;
+    }
+
     return keys;
+#endif
 }
 
 void resetSystem(void) {
@@ -3137,41 +4148,115 @@ void resetSystem(void) {
     RemotesActiveMissiles = 0;
     RemotesState = ALIVE;
     RemotesDeathCount = 0;
+#ifdef BLAZERX
 
     // AI state: in solo play give the player a brief moment before the enemy
     // opens fire. Timer 0 makes it pick a behavior on the first frame.
     AiFireDelay = AiEnabled ? AI_START_GRACE : 0;
+    AiAimSlip = 0;
     AiState = AI_HUNT;
     AiStateTimer = 0;
     AiOrbitDir = 1;
     AiLastX = PlayersX;
     AiLastY = PlayersY;
+    AiLastVx = 0;
+    AiLastVy = 0;
+#endif
 }
 
+#ifdef BLAZERX
+// the scrolling light strip's fire-red gradient (from blazecon.pcx/
+// blazeins.pcx's original register colors 32..41)
+static const unsigned long PanelLightGradient[NUM_PANEL_LIGHTS] = {
+    RGB32(255,0,0), RGB32(239,0,0), RGB32(227,0,0), RGB32(215,0,0), RGB32(203,0,0),
+    RGB32(191,0,0), RGB32(179,0,0), RGB32(167,0,0), RGB32(155,0,0), RGB32(139,0,0),
+};
+#else
 void panelFx(void) {
     // this function performs all of the special effects for the control panel
     int index;
+#endif
 
+#ifdef BLAZERX
+void panelFx(int screen) {
+    // this function performs all of the special effects for the control panel:
+    // redraws the light strip as NUM_PANEL_LIGHTS segments along its long
+    // axis, each showing PanelLightGradient[(segment + rotation) % N] - every
+    // rotation step this shifts which gradient step each segment shows,
+    // producing the same scrolling effect the register rotation used to.
+    static int panelCounter = 0; // used to time the rotation
+    static int rotation = 0;
+    int i;
+    int x1, x2, y1, y2, vertical;
+#else
     static int panelCounter = 0; // used to time the color rotation of the panel
+#endif
 
     // is it time to update colors?
+#ifdef BLAZERX
+    if (++panelCounter <= 2) {
+        return;
+    }
+    panelCounter = 0;
+    rotation = (rotation + 1) % NUM_PANEL_LIGHTS;
+#else
     if (++panelCounter > 2) {
         // reset counter
         panelCounter = 0;
+#endif
 
+#ifdef BLAZERX
+    if (screen == PANEL_FX_CONTROL) {
+        x1 = PANEL_LIGHTS_CONTROL_X1; x2 = PANEL_LIGHTS_CONTROL_X2;
+        y1 = PANEL_LIGHTS_CONTROL_Y1; y2 = PANEL_LIGHTS_CONTROL_Y2;
+        vertical = 1;
+    } else {
+        x1 = PANEL_LIGHTS_BRIEFING_X1; x2 = PANEL_LIGHTS_BRIEFING_X2;
+        y1 = PANEL_LIGHTS_BRIEFING_Y1; y2 = PANEL_LIGHTS_BRIEFING_Y2;
+        vertical = 0;
+    }
+#else
         // do animation to colors
         readColorReg(END_PANEL_REG, &Color1);
+#endif
 
+#ifdef BLAZERX
+    if (vertical) {
+        int stripHeight = (y2 - y1 + 1) / NUM_PANEL_LIGHTS;
+        for (i = 0; i < NUM_PANEL_LIGHTS; i++) {
+            int segY1 = y1 + i * stripHeight;
+            int segY2 = (i == NUM_PANEL_LIGHTS - 1) ? y2 : segY1 + stripHeight - 1;
+            unsigned long color = PanelLightGradient[(i + rotation) % NUM_PANEL_LIGHTS];
+            int yy;
+            for (yy = segY1; yy <= segY2; yy++) {
+                lineH2(x1, x2, yy, color, VideoBuffer);
+            }
+#else
         for (index = END_PANEL_REG; index > START_PANEL_REG; index--) {
             // read the (i-1)th register
             readColorReg(index - 1, &Color2);
 
             // assign it to the ith
             writeColorReg(index, &Color2);
+#endif
         }
+#ifdef BLAZERX
+    } else {
+        int stripWidth = (x2 - x1 + 1) / NUM_PANEL_LIGHTS;
+        for (i = 0; i < NUM_PANEL_LIGHTS; i++) {
+            int segX1 = x1 + i * stripWidth;
+            int segX2 = (i == NUM_PANEL_LIGHTS - 1) ? x2 : segX1 + stripWidth - 1;
+            unsigned long color = PanelLightGradient[(i + rotation) % NUM_PANEL_LIGHTS];
+            int xx;
+            for (xx = segX1; xx <= segX2; xx++) {
+                lineV2(y1, y2, xx, color, VideoBuffer);
+            }
+        }
+#else
 
         // place the value of the first color register into the last to complete the rotation
         writeColorReg(START_PANEL_REG, &Color1);
+#endif
     }
 }
 
@@ -3208,8 +4293,13 @@ void underExplosions(void) {
         pyWindow;
 
     // compute starting position of players window so screen mapping can be done
+#ifdef VBE_SUPPORT
+    pxWindow = PlayersX - VIEW_WIDTH / 2 + SHIP_WIDTH / 2;
+    pyWindow = PlayersY - VIEW_HEIGHT / 2 + SHIP_HEIGHT / 2;
+#else
     pxWindow = PlayersX - 160 + 11;
     pyWindow = PlayersY - 100 + 9;
+#endif
 
     // scan for a running explosions
     for (index = 0; index < NUM_EXPLOSIONS; index++) {
@@ -3218,8 +4308,13 @@ void underExplosions(void) {
             // to what we will do in 3-D when we translate all the objects in the
             // universe to the viewer position, note counter2 and counter3
             // in the sprite structure are used as universe or world x,y
+#ifdef VBE_SUPPORT
+            Explosions[index].x = (Explosions[index].counter2 - pxWindow) * CAM_ZOOM;
+            Explosions[index].y = (Explosions[index].counter3 - pyWindow) * CAM_ZOOM;
+#else
             Explosions[index].x = Explosions[index].counter2 - pxWindow;
             Explosions[index].y = Explosions[index].counter3 - pyWindow;
+#endif
 
             spriteUnderClip(&Explosions[index], DoubleBuffer);
         }
@@ -3291,7 +4386,14 @@ void loadWormhole(void) {
     pcxLoad("blazewrm.pcx", &ImagePcx, 1);
 
     // initialize the wormhole sprite
+#ifdef VBE_SUPPORT
+    spriteInit(&Wormhole, 0, 0, WORMHOLE_WIDTH * CAM_ZOOM, WORMHOLE_HEIGHT * CAM_ZOOM, 0, 0, 0, 0, 0, 0);
+#else
     spriteInit(&Wormhole, 0, 0, 26, 22, 0, 0, 0, 0, 0, 0);
+#endif
+#ifdef BLAZERX
+    Wormhole.transparentColor = SPRITE_TRANSPARENT_COLOR;
+#endif
 
     // extract the animation frames
     for (index = 0; index < NUM_WORMHOLE_FRAMES; index++) {
@@ -3326,12 +4428,22 @@ void underWormhole(void) {
         pyWindow;
 
     // compute starting position of players window so screen mapping can be done
+#ifdef VBE_SUPPORT
+    pxWindow = PlayersX - VIEW_WIDTH / 2 + SHIP_WIDTH / 2;
+    pyWindow = PlayersY - VIEW_HEIGHT / 2 + SHIP_HEIGHT / 2;
+#else
     pxWindow = PlayersX - 160 + 11;
     pyWindow = PlayersY - 100 + 9;
+#endif
 
     // translate wormhole to screen coordinates
+#ifdef VBE_SUPPORT
+    Wormhole.x = (Wormhole.counter2 - pxWindow) * CAM_ZOOM;
+    Wormhole.y = (Wormhole.counter3 - pyWindow) * CAM_ZOOM;
+#else
     Wormhole.x = Wormhole.counter2 - pxWindow;
     Wormhole.y = Wormhole.counter3 - pyWindow;
+#endif
 
     spriteUnderClip(&Wormhole, DoubleBuffer);
 }
@@ -3370,7 +4482,15 @@ void loadFuelCells(void) {
 
     // initialize the fuel cells sprite and load bitmaps
     for (index = 0; index < NUM_FUEL_CELLS; index++) {
+#ifdef VBE_SUPPORT
+        spriteInit(&FuelCells[index], 0, 0,
+                       FUEL_CELL_WIDTH * CAM_ZOOM, FUEL_CELL_HEIGHT * CAM_ZOOM, 0, 0, 0, 0, 0, 0);
+#else
         spriteInit(&FuelCells[index], 0, 0, 20, 18, 0, 0, 0, 0, 0, 0);
+#endif
+#ifdef BLAZERX
+        FuelCells[index].transparentColor = SPRITE_TRANSPARENT_COLOR;
+#endif
 
         // extract the animation frames
         for (frames = 0; frames < NUM_FUEL_FRAMES; frames++) {
@@ -3413,16 +4533,26 @@ void underFuelCells(void) {
         index;
 
     // compute starting position of players window so screen mapping can be done
+#ifdef VBE_SUPPORT
+    pxWindow = PlayersX - VIEW_WIDTH / 2 + SHIP_WIDTH / 2;
+    pyWindow = PlayersY - VIEW_HEIGHT / 2 + SHIP_HEIGHT / 2;
+#else
     pxWindow = PlayersX - 160 + 11;
     pyWindow = PlayersY - 100 + 9;
+#endif
 
     // process each fuel cell
     for (index = 0; index < NUM_FUEL_CELLS; index++) {
         // test if fuel cell is active
         if (FuelCells[index].state == FUEL_CELL_ACTIVE) {
             // translate fuel cells to screen coordinates
+#ifdef VBE_SUPPORT
+            FuelCells[index].x = (FuelCells[index].counter2 - pxWindow) * CAM_ZOOM;
+            FuelCells[index].y = (FuelCells[index].counter3 - pyWindow) * CAM_ZOOM;
+#else
             FuelCells[index].x = FuelCells[index].counter2 - pxWindow;
             FuelCells[index].y = FuelCells[index].counter3 - pyWindow;
+#endif
 
             spriteUnderClip(&FuelCells[index], DoubleBuffer);
         }
@@ -3488,7 +4618,14 @@ void loadAlien(void) {
     pcxLoad("blazealn.pcx", &ImagePcx, 1);
 
     // initialize the alien sprite
+#ifdef VBE_SUPPORT
+    spriteInit(&Alien.body, 0, 0, ALIEN_WIDTH * CAM_ZOOM, ALIEN_HEIGHT * CAM_ZOOM, 0, 0, 0, 0, 0, 0);
+#else
     spriteInit(&Alien.body, 0, 0, 14, 8, 0, 0, 0, 0, 0, 0);
+#endif
+#ifdef BLAZERX
+    Alien.body.transparentColor = SPRITE_TRANSPARENT_COLOR;
+#endif
 
     // extract the animation frames
     for (index = 0; index < NUM_ALIEN_FRAMES; index++) {
@@ -3562,12 +4699,22 @@ void underAlien(void) {
 
     if (Alien.state != ALIEN_INACTIVE) {
         // compute starting position of players window so screen mapping can be done
+#ifdef VBE_SUPPORT
+        pxWindow = PlayersX - VIEW_WIDTH / 2 + SHIP_WIDTH / 2;
+        pyWindow = PlayersY - VIEW_HEIGHT / 2 + SHIP_HEIGHT / 2;
+#else
         pxWindow = PlayersX - 160 + 11;
         pyWindow = PlayersY - 100 + 9;
+#endif
 
         // translate alien to screen coordinates
+#ifdef VBE_SUPPORT
+        Alien.body.x = (Alien.x - pxWindow) * CAM_ZOOM;
+        Alien.body.y = (Alien.y - pyWindow) * CAM_ZOOM;
+#else
         Alien.body.x = Alien.x - pxWindow;
         Alien.body.y = Alien.y - pyWindow;
+#endif
 
         // perform scan in screen coords
         spriteUnderClip(&Alien.body, DoubleBuffer);
@@ -3672,7 +4819,16 @@ void loadHeads(void) {
     pcxLoad("blazehu1.pcx", &ImagePcx, 1);
 
     // initialize the button sprite
+#ifdef BLAZERX
+    spriteInit(&HeadsText, 0, 0, 109, 19, 0, 0, 0, 0, 0, 0);
+    HeadsText.transparentColor = SPRITE_TRANSPARENT_COLOR;
+#else
+#ifdef VBE_SUPPORT
+    spriteInit(&HeadsText, 0, 0, 68, 12, 0, 0, 0, 0, 0, 0);
+#else
     spriteInit(&HeadsText, 0, 0, 34, 6, 0, 0, 0, 0, 0, 0);
+#endif
+#endif
 
     // extract the bitmaps for heads up text
     for (index = 0; index < 7; index++) {
@@ -3687,7 +4843,16 @@ void loadHeads(void) {
     pcxLoad("blazehu2.pcx", &ImagePcx, 1);
 
     // initialize the button sprite
+#ifdef BLAZERX
+    spriteInit(&HeadsNumbers, 0, 0, 26, 19, 0, 0, 0, 0, 0, 0);
+    HeadsNumbers.transparentColor = SPRITE_TRANSPARENT_COLOR;
+#else
+#ifdef VBE_SUPPORT
+    spriteInit(&HeadsNumbers, 0, 0, 16, 12, 0, 0, 0, 0, 0, 0);
+#else
     spriteInit(&HeadsNumbers, 0, 0, 8, 6, 0, 0, 0, 0, 0, 0);
+#endif
+#endif
 
     // extract the bitmaps for heads up text
     for (index = 0; index < 7; index++) {
@@ -3702,7 +4867,16 @@ void loadHeads(void) {
     pcxLoad("blazehu1.pcx", &ImagePcx, 1);
 
     // initialize the button sprite
+#ifdef BLAZERX
+    spriteInit(&HeadsGauge, 0, 0, 109, 19, 0, 0, 0, 0, 0, 0);
+    HeadsGauge.transparentColor = SPRITE_TRANSPARENT_COLOR;
+#else
+#ifdef VBE_SUPPORT
+    spriteInit(&HeadsGauge, 0, 0, 68, 12, 0, 0, 0, 0, 0, 0);
+#else
     spriteInit(&HeadsGauge, 0, 0, 34, 6, 0, 0, 0, 0, 0, 0);
+#endif
+#endif
 
     // extract the bitmaps for heads up gauges
     for (index = 0; index < 23; index++) {
@@ -3732,14 +4906,30 @@ void drawHeads(void) {
         spriteDraw(&HeadsText, DoubleBuffer, 0);
 
         // move down a row
+#ifdef BLAZERX
+        HeadsText.y += 26;
+#else
+#ifdef VBE_SUPPORT
+        HeadsText.y += 16;
+#else
         HeadsText.y += 8;
+#endif
+#endif
 
         // select next message
         HeadsText.currFrame++;
     }
 
     // now draw buttons and numbers
+#ifdef BLAZERX
+    HeadsNumbers.x = LEFT_HEADS_TEXT_X + 128;
+#else
+#ifdef VBE_SUPPORT
+    HeadsNumbers.x = LEFT_HEADS_TEXT_X + 80;
+#else
     HeadsNumbers.x = LEFT_HEADS_TEXT_X + 40;
+#endif
+#endif
     HeadsNumbers.y = LEFT_HEADS_TEXT_Y;
 
     // draw cloaked button
@@ -3752,8 +4942,18 @@ void drawHeads(void) {
     }
 
     // draw scanner enable
+#ifdef BLAZERX
+    HeadsNumbers.x = LEFT_HEADS_TEXT_X + 128;
+    HeadsNumbers.y = LEFT_HEADS_TEXT_Y + 26;
+#else
+#ifdef VBE_SUPPORT
+    HeadsNumbers.x = LEFT_HEADS_TEXT_X + 80;
+    HeadsNumbers.y = LEFT_HEADS_TEXT_Y + 16;
+#else
     HeadsNumbers.x = LEFT_HEADS_TEXT_X + 40;
     HeadsNumbers.y = LEFT_HEADS_TEXT_Y + 8;
+#endif
+#endif
 
     if (PlayersScanner == 1) {
         HeadsNumbers.currFrame = 2;
@@ -3764,8 +4964,18 @@ void drawHeads(void) {
     }
 
     // draw communications
+#ifdef BLAZERX
+    HeadsNumbers.x = LEFT_HEADS_TEXT_X + 128;
+    HeadsNumbers.y = LEFT_HEADS_TEXT_Y + 51;
+#else
+#ifdef VBE_SUPPORT
+    HeadsNumbers.x = LEFT_HEADS_TEXT_X + 80;
+    HeadsNumbers.y = LEFT_HEADS_TEXT_Y + 32;
+#else
     HeadsNumbers.x = LEFT_HEADS_TEXT_X + 40;
     HeadsNumbers.y = LEFT_HEADS_TEXT_Y + 16;
+#endif
+#endif
 
     if (Linked) {
         HeadsNumbers.currFrame = 2;
@@ -3776,8 +4986,18 @@ void drawHeads(void) {
     }
 
     // draw number of ships
+#ifdef BLAZERX
+    HeadsNumbers.x = LEFT_HEADS_TEXT_X + 128;
+    HeadsNumbers.y = LEFT_HEADS_TEXT_Y + 77;
+#else
+#ifdef VBE_SUPPORT
+    HeadsNumbers.x = LEFT_HEADS_TEXT_X + 80;
+    HeadsNumbers.y = LEFT_HEADS_TEXT_Y + 48;
+#else
     HeadsNumbers.x = LEFT_HEADS_TEXT_X + 40;
     HeadsNumbers.y = LEFT_HEADS_TEXT_Y + 24;
+#endif
+#endif
 
     HeadsNumbers.currFrame = 3 + PlayersNumShips;
     spriteDraw(&HeadsNumbers, DoubleBuffer, 0);
@@ -3792,14 +5012,30 @@ void drawHeads(void) {
         spriteDraw(&HeadsText, DoubleBuffer, 0);
 
         // move down a row
+#ifdef BLAZERX
+        HeadsText.y += 26;
+#else
+#ifdef VBE_SUPPORT
+        HeadsText.y += 16;
+#else
         HeadsText.y += 8;
+#endif
+#endif
 
         // select next message
         HeadsText.currFrame++;
     }
 
     // draw gauges
+#ifdef BLAZERX
+    HeadsGauge.x = RIGHT_HEADS_TEXT_X + 128;
+#else
+#ifdef VBE_SUPPORT
+    HeadsGauge.x = RIGHT_HEADS_TEXT_X + 80;
+#else
     HeadsGauge.x = RIGHT_HEADS_TEXT_X + 40;
+#endif
+#endif
     HeadsGauge.y = RIGHT_HEADS_TEXT_Y;
 
     // compute proper frame
@@ -3808,8 +5044,18 @@ void drawHeads(void) {
     // draw the energy level
     spriteDraw(&HeadsGauge, DoubleBuffer, 0);
 
+#ifdef BLAZERX
+    HeadsGauge.x = RIGHT_HEADS_TEXT_X + 128;
+    HeadsGauge.y = RIGHT_HEADS_TEXT_Y + 26;
+#else
+#ifdef VBE_SUPPORT
+    HeadsGauge.x = RIGHT_HEADS_TEXT_X + 80;
+    HeadsGauge.y = RIGHT_HEADS_TEXT_Y + 16;
+#else
     HeadsGauge.x = RIGHT_HEADS_TEXT_X + 40;
     HeadsGauge.y = RIGHT_HEADS_TEXT_Y + 8;
+#endif
+#endif
 
     // compute proper frame
     HeadsGauge.currFrame = 22 - PlayersShieldStrength / 1000;
@@ -3833,11 +5079,27 @@ void eraseHeads(void) {
         spriteDraw(&HeadsText, DoubleBuffer, 0);
 
         // move down a row
+#ifdef BLAZERX
+        HeadsText.y += 26;
+#else
+#ifdef VBE_SUPPORT
+        HeadsText.y += 16;
+#else
         HeadsText.y += 8;
+#endif
+#endif
     }
 
     // now erase buttons and numbers
+#ifdef BLAZERX
+    HeadsNumbers.x = LEFT_HEADS_TEXT_X + 128;
+#else
+#ifdef VBE_SUPPORT
+    HeadsNumbers.x = LEFT_HEADS_TEXT_X + 80;
+#else
     HeadsNumbers.x = LEFT_HEADS_TEXT_X + 40;
+#endif
+#endif
     HeadsNumbers.y = LEFT_HEADS_TEXT_Y;
 
     // erase cloaked button
@@ -3845,20 +5107,50 @@ void eraseHeads(void) {
     spriteDraw(&HeadsNumbers, DoubleBuffer, 0);
 
     // erase scanner
+#ifdef BLAZERX
+    HeadsNumbers.x = LEFT_HEADS_TEXT_X + 128;
+    HeadsNumbers.y = LEFT_HEADS_TEXT_Y + 26;
+#else
+#ifdef VBE_SUPPORT
+    HeadsNumbers.x = LEFT_HEADS_TEXT_X + 80;
+    HeadsNumbers.y = LEFT_HEADS_TEXT_Y + 16;
+#else
     HeadsNumbers.x = LEFT_HEADS_TEXT_X + 40;
     HeadsNumbers.y = LEFT_HEADS_TEXT_Y + 8;
+#endif
+#endif
 
     spriteDraw(&HeadsNumbers, DoubleBuffer, 0);
 
     // erase communications
+#ifdef BLAZERX
+    HeadsNumbers.x = LEFT_HEADS_TEXT_X + 128;
+    HeadsNumbers.y = LEFT_HEADS_TEXT_Y + 51;
+#else
+#ifdef VBE_SUPPORT
+    HeadsNumbers.x = LEFT_HEADS_TEXT_X + 80;
+    HeadsNumbers.y = LEFT_HEADS_TEXT_Y + 32;
+#else
     HeadsNumbers.x = LEFT_HEADS_TEXT_X + 40;
     HeadsNumbers.y = LEFT_HEADS_TEXT_Y + 16;
+#endif
+#endif
 
     spriteDraw(&HeadsNumbers, DoubleBuffer, 0);
 
     // erase ships number
+#ifdef BLAZERX
+    HeadsNumbers.x = LEFT_HEADS_TEXT_X + 128;
+    HeadsNumbers.y = LEFT_HEADS_TEXT_Y + 77;
+#else
+#ifdef VBE_SUPPORT
+    HeadsNumbers.x = LEFT_HEADS_TEXT_X + 80;
+    HeadsNumbers.y = LEFT_HEADS_TEXT_Y + 48;
+#else
     HeadsNumbers.x = LEFT_HEADS_TEXT_X + 40;
     HeadsNumbers.y = LEFT_HEADS_TEXT_Y + 24;
+#endif
+#endif
 
     spriteDraw(&HeadsNumbers, DoubleBuffer, 0);
 
@@ -3871,11 +5163,27 @@ void eraseHeads(void) {
         spriteDraw(&HeadsText, DoubleBuffer, 0);
 
         // move down a row
+#ifdef BLAZERX
+        HeadsText.y += 26;
+#else
+#ifdef VBE_SUPPORT
+        HeadsText.y += 16;
+#else
         HeadsText.y += 8;
+#endif
+#endif
     }
 
     // erase gauges
+#ifdef BLAZERX
+    HeadsGauge.x = RIGHT_HEADS_TEXT_X + 128;
+#else
+#ifdef VBE_SUPPORT
+    HeadsGauge.x = RIGHT_HEADS_TEXT_X + 80;
+#else
     HeadsGauge.x = RIGHT_HEADS_TEXT_X + 40;
+#endif
+#endif
     HeadsGauge.y = RIGHT_HEADS_TEXT_Y;
 
     // compute proper frame
@@ -3885,8 +5193,18 @@ void eraseHeads(void) {
     spriteDraw(&HeadsGauge, DoubleBuffer, 0);
 
     // draw gauges
+#ifdef BLAZERX
+    HeadsGauge.x = RIGHT_HEADS_TEXT_X + 128;
+    HeadsGauge.y = RIGHT_HEADS_TEXT_Y + 26;
+#else
+#ifdef VBE_SUPPORT
+    HeadsGauge.x = RIGHT_HEADS_TEXT_X + 80;
+    HeadsGauge.y = RIGHT_HEADS_TEXT_Y + 16;
+#else
     HeadsGauge.x = RIGHT_HEADS_TEXT_X + 40;
     HeadsGauge.y = RIGHT_HEADS_TEXT_Y + 8;
+#endif
+#endif
 
     // erase the shield strength
     spriteDraw(&HeadsGauge, DoubleBuffer, 0);
@@ -3902,6 +5220,28 @@ void eraseScanner(void) {
     // this function erases the scanner and the blips
 
     // first erase scanner grid
+#ifdef BLAZERX
+    lineH2Thick(SCANNER_X, SCANNER_X + 205, SCANNER_Y,      SCANNER_LINE_THICK, 0, DoubleBuffer);
+    lineH2Thick(SCANNER_X, SCANNER_X + 205, SCANNER_Y + 61, SCANNER_LINE_THICK, 0, DoubleBuffer);
+    lineH2Thick(SCANNER_X, SCANNER_X + 205, SCANNER_Y + 122, SCANNER_LINE_THICK, 0, DoubleBuffer);
+
+    lineV2Thick(SCANNER_Y, SCANNER_Y + 122, SCANNER_X,       SCANNER_LINE_THICK, 0, DoubleBuffer);
+    lineV2Thick(SCANNER_Y, SCANNER_Y + 122, SCANNER_X + 51,  SCANNER_LINE_THICK, 0, DoubleBuffer);
+    lineV2Thick(SCANNER_Y, SCANNER_Y + 122, SCANNER_X + 102,  SCANNER_LINE_THICK, 0, DoubleBuffer);
+    lineV2Thick(SCANNER_Y, SCANNER_Y + 122, SCANNER_X + 154,  SCANNER_LINE_THICK, 0, DoubleBuffer);
+    lineV2Thick(SCANNER_Y, SCANNER_Y + 122, SCANNER_X + 205, SCANNER_LINE_THICK, 0, DoubleBuffer);
+#else
+#ifdef VBE_SUPPORT
+    lineH2Thick(SCANNER_X, SCANNER_X + 128, SCANNER_Y,      SCANNER_LINE_THICK, 0, DoubleBuffer);
+    lineH2Thick(SCANNER_X, SCANNER_X + 128, SCANNER_Y + 38, SCANNER_LINE_THICK, 0, DoubleBuffer);
+    lineH2Thick(SCANNER_X, SCANNER_X + 128, SCANNER_Y + 76, SCANNER_LINE_THICK, 0, DoubleBuffer);
+
+    lineV2Thick(SCANNER_Y, SCANNER_Y + 76, SCANNER_X,       SCANNER_LINE_THICK, 0, DoubleBuffer);
+    lineV2Thick(SCANNER_Y, SCANNER_Y + 76, SCANNER_X + 32,  SCANNER_LINE_THICK, 0, DoubleBuffer);
+    lineV2Thick(SCANNER_Y, SCANNER_Y + 76, SCANNER_X + 64,  SCANNER_LINE_THICK, 0, DoubleBuffer);
+    lineV2Thick(SCANNER_Y, SCANNER_Y + 76, SCANNER_X + 96,  SCANNER_LINE_THICK, 0, DoubleBuffer);
+    lineV2Thick(SCANNER_Y, SCANNER_Y + 76, SCANNER_X + 128, SCANNER_LINE_THICK, 0, DoubleBuffer);
+#else
     lineH2(SCANNER_X, SCANNER_X + 64, SCANNER_Y,      0, DoubleBuffer);
     lineH2(SCANNER_X, SCANNER_X + 64, SCANNER_Y + 16, 0, DoubleBuffer);
     lineH2(SCANNER_X, SCANNER_X + 64, SCANNER_Y + 32, 0, DoubleBuffer);
@@ -3911,12 +5251,36 @@ void eraseScanner(void) {
     lineV2(SCANNER_Y, SCANNER_Y + 32, SCANNER_X + 32, 0, DoubleBuffer);
     lineV2(SCANNER_Y, SCANNER_Y + 32, SCANNER_X + 48, 0, DoubleBuffer);
     lineV2(SCANNER_Y, SCANNER_Y + 32, SCANNER_X + 64, 0, DoubleBuffer);
+#endif
+#endif
 }
 
 void drawScanner(void) {
     // this function draws the scanner and the blips
 
     // first draw scanner grid
+#ifdef BLAZERX
+    lineH2Thick(SCANNER_X, SCANNER_X + 205, SCANNER_Y,      SCANNER_LINE_THICK, SCANNER_GRID_COLOR, DoubleBuffer);
+    lineH2Thick(SCANNER_X, SCANNER_X + 205, SCANNER_Y + 61, SCANNER_LINE_THICK, SCANNER_GRID_COLOR, DoubleBuffer);
+    lineH2Thick(SCANNER_X, SCANNER_X + 205, SCANNER_Y + 122, SCANNER_LINE_THICK, SCANNER_GRID_COLOR, DoubleBuffer);
+
+    lineV2Thick(SCANNER_Y, SCANNER_Y + 122, SCANNER_X,       SCANNER_LINE_THICK, SCANNER_GRID_COLOR, DoubleBuffer);
+    lineV2Thick(SCANNER_Y, SCANNER_Y + 122, SCANNER_X + 51,  SCANNER_LINE_THICK, SCANNER_GRID_COLOR, DoubleBuffer);
+    lineV2Thick(SCANNER_Y, SCANNER_Y + 122, SCANNER_X + 102,  SCANNER_LINE_THICK, SCANNER_GRID_COLOR, DoubleBuffer);
+    lineV2Thick(SCANNER_Y, SCANNER_Y + 122, SCANNER_X + 154,  SCANNER_LINE_THICK, SCANNER_GRID_COLOR, DoubleBuffer);
+    lineV2Thick(SCANNER_Y, SCANNER_Y + 122, SCANNER_X + 205, SCANNER_LINE_THICK, SCANNER_GRID_COLOR, DoubleBuffer);
+#else
+#ifdef VBE_SUPPORT
+    lineH2Thick(SCANNER_X, SCANNER_X + 128, SCANNER_Y,      SCANNER_LINE_THICK, 10, DoubleBuffer);
+    lineH2Thick(SCANNER_X, SCANNER_X + 128, SCANNER_Y + 38, SCANNER_LINE_THICK, 10, DoubleBuffer);
+    lineH2Thick(SCANNER_X, SCANNER_X + 128, SCANNER_Y + 76, SCANNER_LINE_THICK, 10, DoubleBuffer);
+
+    lineV2Thick(SCANNER_Y, SCANNER_Y + 76, SCANNER_X,       SCANNER_LINE_THICK, 10, DoubleBuffer);
+    lineV2Thick(SCANNER_Y, SCANNER_Y + 76, SCANNER_X + 32,  SCANNER_LINE_THICK, 10, DoubleBuffer);
+    lineV2Thick(SCANNER_Y, SCANNER_Y + 76, SCANNER_X + 64,  SCANNER_LINE_THICK, 10, DoubleBuffer);
+    lineV2Thick(SCANNER_Y, SCANNER_Y + 76, SCANNER_X + 96,  SCANNER_LINE_THICK, 10, DoubleBuffer);
+    lineV2Thick(SCANNER_Y, SCANNER_Y + 76, SCANNER_X + 128, SCANNER_LINE_THICK, 10, DoubleBuffer);
+#else
     lineH2(SCANNER_X, SCANNER_X + 64, SCANNER_Y,      10, DoubleBuffer);
     lineH2(SCANNER_X, SCANNER_X + 64, SCANNER_Y + 16, 10, DoubleBuffer);
     lineH2(SCANNER_X, SCANNER_X + 64, SCANNER_Y + 32, 10, DoubleBuffer);
@@ -3926,15 +5290,59 @@ void drawScanner(void) {
     lineV2(SCANNER_Y, SCANNER_Y + 32, SCANNER_X + 32, 10, DoubleBuffer);
     lineV2(SCANNER_Y, SCANNER_Y + 32, SCANNER_X + 48, 10, DoubleBuffer);
     lineV2(SCANNER_Y, SCANNER_Y + 32, SCANNER_X + 64, 10, DoubleBuffer);
+#endif
+#endif
 }
+
+#ifdef VBE_SUPPORT
+void blipSave(int x, int y, int* under) {
+    // save the BLIP_SIZE x BLIP_SIZE block of pixels under a blip position
+    int dx, dy, i = 0;
+    for (dy = 0; dy < BLIP_SIZE; dy++) {
+        for (dx = 0; dx < BLIP_SIZE; dx++) {
+            under[i++] = readPixelDb(x - BLIP_SIZE / 2 + dx, y - BLIP_SIZE / 2 + dy);
+        }
+    }
+}
+
+void blipDraw(int x, int y, int color) {
+    // draw a BLIP_SIZE x BLIP_SIZE filled block, centered on (x,y)
+    int dx, dy;
+    for (dy = 0; dy < BLIP_SIZE; dy++) {
+        for (dx = 0; dx < BLIP_SIZE; dx++) {
+            writePixelDb(x - BLIP_SIZE / 2 + dx, y - BLIP_SIZE / 2 + dy, color);
+        }
+    }
+}
+
+void blipRestore(int x, int y, const int* under) {
+    // restore a block saved by blipSave
+    int dx, dy, i = 0;
+    for (dy = 0; dy < BLIP_SIZE; dy++) {
+        for (dx = 0; dx < BLIP_SIZE; dx++) {
+            writePixelDb(x - BLIP_SIZE / 2 + dx, y - BLIP_SIZE / 2 + dy, under[i++]);
+        }
+    }
+}
+#endif
 
 void underBlips(void) {
     // this function is used to draw all the scanner blips
 
     // draw blips, notice that the position of the remote and player is
     // scaled to fit into the scanner window
+#ifdef BLAZERX
+    blipSave(SCANNER_X + PlayersX / 13, SCANNER_Y + PlayersY / 21, UnderPlayersBlip);
+    blipSave(SCANNER_X + RemotesX / 13, SCANNER_Y + RemotesY / 21, UnderRemotesBlip);
+#else
+#ifdef VBE_SUPPORT
+    blipSave(SCANNER_X + PlayersX / 20, SCANNER_Y + PlayersY / 34, UnderPlayersBlip);
+    blipSave(SCANNER_X + RemotesX / 20, SCANNER_Y + RemotesY / 34, UnderRemotesBlip);
+#else
     UnderPlayersBlip = readPixelDb(SCANNER_X + PlayersX / 40, SCANNER_Y + PlayersY / 80);
     UnderRemotesBlip = readPixelDb(SCANNER_X + RemotesX / 40, SCANNER_Y + RemotesY / 80);
+#endif
+#endif
 }
 
 void drawBlips(void) {
@@ -3943,11 +5351,27 @@ void drawBlips(void) {
     // draw blips, notice that the position of the remote and player is
     // scaled to fit into the scanner window
     if (PlayersCloak == -1) {
+#ifdef BLAZERX
+        blipDraw(SCANNER_X + PlayersX / 13, SCANNER_Y + PlayersY / 21, RGB32(85,85,255));
+#else
+#ifdef VBE_SUPPORT
+        blipDraw(SCANNER_X + PlayersX / 20, SCANNER_Y + PlayersY / 34, 9);
+#else
         writePixelDb(SCANNER_X + PlayersX / 40, SCANNER_Y + PlayersY / 80, 9);
+#endif
+#endif
     }
 
     if (RemotesCloak == -1) {
+#ifdef BLAZERX
+        blipDraw(SCANNER_X + RemotesX / 13, SCANNER_Y + RemotesY / 21, BLIP_REMOTE);
+#else
+#ifdef VBE_SUPPORT
+        blipDraw(SCANNER_X + RemotesX / 20, SCANNER_Y + RemotesY / 34, 12);
+#else
         writePixelDb(SCANNER_X + RemotesX / 40, SCANNER_Y + RemotesY / 80, 12);
+#endif
+#endif
     }
 }
 
@@ -3956,8 +5380,18 @@ void eraseBlips(void) {
 
     // erase blips, notice that the position of the remote and player is
     // scaled to fit into the scanner window
+#ifdef BLAZERX
+    blipRestore(SCANNER_X + PlayersX / 13, SCANNER_Y + PlayersY / 21, UnderPlayersBlip);
+    blipRestore(SCANNER_X + RemotesX / 13, SCANNER_Y + RemotesY / 21, UnderRemotesBlip);
+#else
+#ifdef VBE_SUPPORT
+    blipRestore(SCANNER_X + PlayersX / 20, SCANNER_Y + PlayersY / 34, UnderPlayersBlip);
+    blipRestore(SCANNER_X + RemotesX / 20, SCANNER_Y + RemotesY / 34, UnderRemotesBlip);
+#else
     writePixelDb(SCANNER_X + PlayersX / 40, SCANNER_Y + PlayersY / 80, UnderPlayersBlip);
     writePixelDb(SCANNER_X + RemotesX / 40, SCANNER_Y + RemotesY / 80, UnderRemotesBlip);
+#endif
+#endif
 }
 
 void musicInit(void) {
@@ -4128,17 +5562,17 @@ int getModemString(char* buffer) {
     return 1;
 }
 
-#ifdef NET_ENABLED
+#ifdef BLAZERX
 // ---------------------------------------------------------------------------
-// Serial-link compatibility shim (NET_ENABLED builds only)
+// Serial-link compatibility shim
 //
 // StarBlazer's modem code (engine/black9) is a reliable, ordered byte stream.
-// Under NET_ENABLED we leave every serial call site in the game verbatim — so
-// the non-net build stays byte-for-byte identical — and redirect those calls,
-// at compile time, onto the IPX transport in engine/ipx. The game's lockstep
-// protocol (write a byte, then a blocking read, every frame) maps to a
-// "flush-on-read" scheme: each read first ships our pending writes as one
-// datagram, then blocks (pumping netPoll) until the peer's datagram arrives.
+// We leave every serial call site in the game verbatim — so the logic stays
+// byte-for-byte identical to the book — and redirect those calls, at compile
+// time, onto the IPX transport in engine/ipx. The game's lockstep protocol
+// (write a byte, then a blocking read, every frame) maps to a "flush-on-read"
+// scheme: each read first ships our pending writes as one datagram, then
+// blocks (pumping netPoll) until the peer's datagram arrives.
 //
 // Roles: broadcast discovery decides Master/Slave (host = MASTER, joiner =
 // SLAVE); GAME_LINKING below applies the result via netRole().
@@ -4365,7 +5799,7 @@ static int netLinkHost(void) {
 #define waitForConnection()   netLinkHost()
 #define serialWrite(ch)       netLinkWrite(ch)
 #define serialReadWait()      netLinkReadWait()
-#endif // NET_ENABLED
+#endif
 
 void main(int argc, char** argv) {
     // the main controls of the player and remote logic, normally we would
@@ -4404,7 +5838,7 @@ void main(int argc, char** argv) {
     getModemString(modemIniString);
     printf("\nExtra modem initialization string = %s", modemIniString);
 
-#ifdef NET_ENABLED
+#ifdef BLAZERX
     // bring up the LAN transport before we leave text mode, so any diagnostics
     // are visible
     printf("\nStarBlazer LAN: initializing network...\n");
@@ -4415,12 +5849,22 @@ void main(int argc, char** argv) {
         printf("IPX unavailable - LAN play disabled (solo only).\n");
     }
     timeDelay(20);
-#endif
 
+#endif
     timeDelay(25);
 
+#ifdef BLAZERX
+    // set the graphics mode to SVGA 1024x768, 32-bit true colour
+    setGraphicsModeVesa(1024, 768, 32);
+#else
+#ifdef VBE_SUPPORT
+    // set the graphics mode to SVGA 640x480x256
+    setGraphicsModeVesa(640, 480, 8);
+#else
     // set the graphics mode to mode 13h
     setGraphicsMode(GRAPHICS_MODE13);
+#endif
+#endif
 
     // start up music system
     if (MusicEnabled) {
@@ -4436,6 +5880,14 @@ void main(int argc, char** argv) {
     // put up Waite header
     introWaite();
 
+#ifdef VBE_SUPPORT
+    // apply the game's palette
+    pcxInit(&ImagePcx);
+    pcxLoad("blazeint.pcx", &ImagePcx, 1);
+    pcxDelete(&ImagePcx);
+    fillScreen(0);
+
+#endif
     // seed the random number generator with time
     srand(timerQuery());
 
@@ -4446,13 +5898,143 @@ void main(int argc, char** argv) {
     timeDelay(5);
 
     // create the double buffer
+#ifdef BLAZERX
+    createDoubleBuffer(768);
+    techPrint(START_MESS_X, START_MESS_Y + 51, "DOUBLE BUFFER CREATED", VideoBuffer);
+    techPrint(START_MESS_X, START_MESS_Y + 77, "LANGUAGE TRANSLATION ENGAGED", VideoBuffer);
+
+    // install the keyboard driver
+    keyboardInstallDriver();
+
+    techPrint(START_MESS_X, START_MESS_Y + 102, "NEURAL INTERFACE ACTIVATED", VideoBuffer);
+
+    // load in all gadget icons
+    loadIcons();
+    techPrint(START_MESS_X, START_MESS_Y + 128, "VISUAL ICONS LOADED", VideoBuffer);
+
+    // load in the ships
+    loadShips();
+    techPrint(START_MESS_X, START_MESS_Y + 154, "SHIPS LOADED", VideoBuffer);
+
+    // assign ships to player and remote
+    copyFrames(&PlayersShip, &GryfonL);
+    copyFrames(&RemotesShip, &RaptorR);
+
+    // start the asteroids up
+    initAsteroids(16, 6, 4);
+    techPrint(START_MESS_X, START_MESS_Y + 179, "ASTEROID TRAJECTORIES COMPUTED", VideoBuffer);
+
+    // start the stars
+    initStars();
+    techPrint(START_MESS_X, START_MESS_Y + 205, "STARFIELD GENERATED", VideoBuffer);
+
+    // start the missiles
+    initMissiles();
+    techPrint(START_MESS_X, START_MESS_Y + 230, "WEAPONS DAEMONS ONLINE", VideoBuffer);
+
+    // start the explosions
+    initExplosions();
+    loadExplosions();
+    initNovas();
+    techPrint(START_MESS_X, START_MESS_Y + 256, "EXPLOSION ANIMATION SYSTEM LOADED", VideoBuffer);
+
+    techPrint(START_MESS_X, START_MESS_Y + 282, "FONT ENGINE ENGAGED", VideoBuffer);
+
+    // load the wormhole imagery
+    loadWormhole();
+    initWormhole();
+    techPrint(START_MESS_X, START_MESS_Y + 307, "WORMHOLE CREATED", VideoBuffer);
+
+    // load the aliens
+    loadAlien();
+    initAlien();
+    techPrint(START_MESS_X, START_MESS_Y + 333, "ENEMY AI GENERATED", VideoBuffer);
+
+    // load the fuel cells
+    loadFuelCells();
+    initFuelCells();
+    techPrint(START_MESS_X, START_MESS_Y + 358, "FUEL CELLS PLACED", VideoBuffer);
+
+    // load the heads up display
+    loadHeads();
+    initHeads();
+    techPrint(START_MESS_X, START_MESS_Y + 384, "HEADS UP DISPLAY ACTIVE", VideoBuffer);
+
+    // blink ok
+    techPrint(START_MESS_X, START_MESS_Y + 435, "SYSTEM BIOS O.K.", VideoBuffer);
+#else
+#ifdef VBE_SUPPORT
+    createDoubleBuffer(480);
+    techPrint(START_MESS_X, START_MESS_Y + 32, "DOUBLE BUFFER CREATED", VideoBuffer);
+    techPrint(START_MESS_X, START_MESS_Y + 48, "LANGUAGE TRANSLATION ENGAGED", VideoBuffer);
+
+    // install the keyboard driver
+    keyboardInstallDriver();
+
+    techPrint(START_MESS_X, START_MESS_Y + 64, "NEURAL INTERFACE ACTIVATED", VideoBuffer);
+
+    // load in all gadget icons
+    loadIcons();
+    techPrint(START_MESS_X, START_MESS_Y + 80, "VISUAL ICONS LOADED", VideoBuffer);
+
+    // load in the ships
+    loadShips();
+    techPrint(START_MESS_X, START_MESS_Y + 96, "SHIPS LOADED", VideoBuffer);
+
+    // assign ships to player and remote
+    copyFrames(&PlayersShip, &GryfonL);
+    copyFrames(&RemotesShip, &RaptorR);
+
+    // start the asteroids up
+    initAsteroids(16, 6, 4);
+    techPrint(START_MESS_X, START_MESS_Y + 112, "ASTEROID TRAJECTORIES COMPUTED", VideoBuffer);
+
+    // start the stars
+    initStars();
+    techPrint(START_MESS_X, START_MESS_Y + 128, "STARFIELD GENERATED", VideoBuffer);
+
+    // start the missiles
+    initMissiles();
+    techPrint(START_MESS_X, START_MESS_Y + 144, "WEAPONS DAEMONS ONLINE", VideoBuffer);
+
+    // start the explosions
+    initExplosions();
+    loadExplosions();
+    initNovas();
+    techPrint(START_MESS_X, START_MESS_Y + 160, "EXPLOSION ANIMATION SYSTEM LOADED", VideoBuffer);
+
+    techPrint(START_MESS_X, START_MESS_Y + 176, "FONT ENGINE ENGAGED", VideoBuffer);
+
+    // load the wormhole imagery
+    loadWormhole();
+    initWormhole();
+    techPrint(START_MESS_X, START_MESS_Y + 192, "WORMHOLE CREATED", VideoBuffer);
+
+    // load the aliens
+    loadAlien();
+    initAlien();
+    techPrint(START_MESS_X, START_MESS_Y + 208, "ENEMY AI GENERATED", VideoBuffer);
+
+    // load the fuel cells
+    loadFuelCells();
+    initFuelCells();
+    techPrint(START_MESS_X, START_MESS_Y + 224, "FUEL CELLS PLACED", VideoBuffer);
+
+    // load the heads up display
+    loadHeads();
+    initHeads();
+    techPrint(START_MESS_X, START_MESS_Y + 240, "HEADS UP DISPLAY ACTIVE", VideoBuffer);
+
+    // blink ok
+    techPrint(START_MESS_X, START_MESS_Y + 272, "SYSTEM BIOS O.K.", VideoBuffer);
+#else
     createDoubleBuffer(200);
     techPrint(START_MESS_X, START_MESS_Y + 16, "DOUBLE BUFFER CREATED", VideoBuffer);
     techPrint(START_MESS_X, START_MESS_Y + 24, "LANGUAGE TRANSLATION ENGAGED", VideoBuffer);
 
     // install the keyboard driver
     keyboardInstallDriver();
-    
+
     techPrint(START_MESS_X, START_MESS_Y + 32, "NEURAL INTERFACE ACTIVATED", VideoBuffer);
 
     // load in all gadget icons
@@ -4511,15 +6093,33 @@ void main(int argc, char** argv) {
 
     // blink ok
     techPrint(START_MESS_X, START_MESS_Y + 136, "SYSTEM BIOS O.K.", VideoBuffer);
+#endif
+#endif
 
     digitalFxPlay(BLZBIOS_VOC, 1);
 
     for (index = 0; index < 3; index++) {
         // draw the message and the erase the message
+#ifdef BLAZERX
+        fontEngine1(START_MESS_X, START_MESS_Y + 435, 0, 0, "SYSTEM BIOS O.K.", VideoBuffer);
+#else
+#ifdef VBE_SUPPORT
+        fontEngine1(START_MESS_X, START_MESS_Y + 272, 0, 0, "SYSTEM BIOS O.K.", VideoBuffer);
+#else
         fontEngine1(START_MESS_X, START_MESS_Y + 136, 0, 0, "SYSTEM BIOS O.K.", VideoBuffer);
+#endif
+#endif
         timeDelay(8);
 
+#ifdef BLAZERX
+        fontEngine1(START_MESS_X, START_MESS_Y + 435, 0, 0, "                ", VideoBuffer);
+#else
+#ifdef VBE_SUPPORT
+        fontEngine1(START_MESS_X, START_MESS_Y + 272, 0, 0, "                ", VideoBuffer);
+#else
         fontEngine1(START_MESS_X, START_MESS_Y + 136, 0, 0, "                ", VideoBuffer);
+#endif
+#endif
         timeDelay(8);
     }
 
@@ -4528,9 +6128,11 @@ void main(int argc, char** argv) {
 
     // do intro piece
     introTitle();
+#ifndef BLAZERX
 
     // save the system palette here because we are going to really thrash it!!!
     readPalette(0, 255, &GamePalette);
+#endif
 
     // main event loop
     while (GameState != GAME_OVER) {
@@ -4547,14 +6149,18 @@ void main(int argc, char** argv) {
                 Linked = 0;
             }
 
+#ifdef BLAZERX
             // back at the menu: clear single-player AI until a mode is chosen
             AiEnabled = 0;
 
+#endif
             // user in the setup state
             introControls();
+#ifndef BLAZERX
 
             // restore palette
             writePalette(&GamePalette);
+#endif
 
             // enter setup event loop
             while (GameState == GAME_SETUP) {
@@ -4565,6 +6171,24 @@ void main(int argc, char** argv) {
                         // erase the button and move it up
                         spriteErase(&Button1, VideoBuffer);
 
+#ifdef BLAZERX
+                        Button1.y -= 46;
+
+                        // test if we need to wrap around bottom
+                        if (--Button1.counter1 < 0) {
+                            Button1.counter1 = 6;
+                            Button1.y = 242 + 6 * 46;
+                        }
+#else
+#ifdef VBE_SUPPORT
+                        Button1.y -= 29;
+
+                        // test if we need to wrap around bottom
+                        if (--Button1.counter1 < 0) {
+                            Button1.counter1 = 6;
+                            Button1.y = 151 + 6 * 29;
+                        }
+#else
                         Button1.y -= 12;
 
                         // test if we need to wrap around bottom
@@ -4572,6 +6196,8 @@ void main(int argc, char** argv) {
                             Button1.counter1 = 6;
                             Button1.y = 63 + 6 * 12;
                         }
+#endif
+#endif
 
                         // scan and draw button
                         spriteUnder(&Button1, VideoBuffer);
@@ -4584,6 +6210,24 @@ void main(int argc, char** argv) {
                         // erase the button and move it down
                         spriteErase(&Button1, VideoBuffer);
 
+#ifdef BLAZERX
+                        Button1.y += 46;
+
+                        // test if we need to wrap around top
+                        if (++Button1.counter1 > 6) {
+                            Button1.counter1 = 0;
+                            Button1.y = 242;
+                        }
+#else
+#ifdef VBE_SUPPORT
+                        Button1.y += 29;
+
+                        // test if we need to wrap around top
+                        if (++Button1.counter1 > 6) {
+                            Button1.counter1 = 0;
+                            Button1.y = 151;
+                        }
+#else
                         Button1.y += 12;
 
                         // test if we need to wrap around top
@@ -4591,6 +6235,8 @@ void main(int argc, char** argv) {
                             Button1.counter1 = 0;
                             Button1.y = 63;
                         }
+#endif
+#endif
 
                         // scan and draw button
                         spriteUnder(&Button1, VideoBuffer);
@@ -4619,8 +6265,13 @@ void main(int argc, char** argv) {
                             case SETUP_PLAY_SOLO: {
                                 clearDisplay(0);
 
+#ifdef BLAZERX
+                                fontEngine1(DISPLAY_X + 3, DISPLAY_Y + 3, 0, 0, "ENTERING ARENA", VideoBuffer);
+#else
                                 fontEngine1(DISPLAY_X + 2, DISPLAY_Y + 2, 0, 0, "ENTERING ARENA", VideoBuffer);
+#endif
 
+#ifdef BLAZERX
                                 // single-player: no network link, the remote
                                 // ship is flown by the AI. Roles are fixed so
                                 // the player and AI spawn at opposite corners.
@@ -4632,6 +6283,12 @@ void main(int argc, char** argv) {
                                 // give the AI the opposite ship type for variety
                                 RemotesShipType = (PlayersShipType == GRYFON_SHIP)
                                     ? RAPTOR_SHIP : GRYFON_SHIP;
+#else
+                                // single-player: no network link
+                                Linked = 0;
+                                Master = 1;
+                                Slave  = 0;
+#endif
 
                                 // move to running state
                                 GameState = GAME_RUNNING;
@@ -4642,7 +6299,11 @@ void main(int argc, char** argv) {
                             case SETUP_MAKE_CONNECTION: {
                                 clearDisplay(0);
 
+#ifdef BLAZERX
+                                fontEngine1(DISPLAY_X + 3, DISPLAY_Y + 3, 0, 0, "ENTER NUMBER", VideoBuffer);
+#else
                                 fontEngine1(DISPLAY_X + 2, DISPLAY_Y + 2, 0, 0, "ENTER NUMBER", VideoBuffer);
+#endif
 
                                 // remove the keyboard handler
                                 // makes user input easier for strings
@@ -4657,7 +6318,11 @@ void main(int argc, char** argv) {
                                 if (!result) {
                                     clearDisplay(0);
 
+#ifdef BLAZERX
+                                    fontEngine1(DISPLAY_X + 3, DISPLAY_Y + 3, 0, 0, "ABORTED...", VideoBuffer);
+#else
                                     fontEngine1(DISPLAY_X + 2, DISPLAY_Y + 2, 0, 0, "ABORTED...", VideoBuffer);
+#endif
 
                                     digitalFxPlay(BLZABRT_VOC, 1);
 
@@ -4687,9 +6352,21 @@ void main(int argc, char** argv) {
                                 // let user know what's going on
                                 clearDisplay(0);
 
+#ifdef BLAZERX
+                                fontEngine1(DISPLAY_X + 3, DISPLAY_Y + 3, 0, 0, "DIALING:", VideoBuffer);
+#else
                                 fontEngine1(DISPLAY_X + 2, DISPLAY_Y + 2, 0, 0, "DIALING:", VideoBuffer);
+#endif
 
+#ifdef BLAZERX
+                                fontEngine1(DISPLAY_X + 6, DISPLAY_Y + 6 + 26, 0, 0, number, VideoBuffer);
+#else
+#ifdef VBE_SUPPORT
+                                fontEngine1(DISPLAY_X + 4, DISPLAY_Y + 4 + 16, 0, 0, number, VideoBuffer);
+#else
                                 fontEngine1(DISPLAY_X + 2, DISPLAY_Y + 2 + 8, 0, 0, number, VideoBuffer);
+#endif
+#endif
 
                                 digitalFxPlay(BLZDIAL_VOC, 1);
 
@@ -4709,7 +6386,11 @@ void main(int argc, char** argv) {
 
                                     clearDisplay(0);
 
+#ifdef BLAZERX
+                                    fontEngine1(DISPLAY_X + 3, DISPLAY_Y + 3, 0, 0, "CONNECTED!", VideoBuffer);
+#else
                                     fontEngine1(DISPLAY_X + 2, DISPLAY_Y + 2, 0, 0, "CONNECTED!", VideoBuffer);
+#endif
 
                                     timeDelay(5);
 
@@ -4723,7 +6404,11 @@ void main(int argc, char** argv) {
                                     // print that selection was aborted
                                     clearDisplay(0);
 
+#ifdef BLAZERX
+                                    fontEngine1(DISPLAY_X + 3, DISPLAY_Y + 3, 0, 0, "ABORTED...", VideoBuffer);
+#else
                                     fontEngine1(DISPLAY_X + 2, DISPLAY_Y + 2, 0, 0, "ABORTED...", VideoBuffer);
+#endif
 
                                     digitalFxPlay(BLZABRT_VOC, 1);
 
@@ -4739,7 +6424,11 @@ void main(int argc, char** argv) {
                                     // print that selection was aborted
                                     clearDisplay(0);
 
+#ifdef BLAZERX
+                                    fontEngine1(DISPLAY_X + 3, DISPLAY_Y + 3, 0, 0, "COMM PROBLEM", VideoBuffer);
+#else
                                     fontEngine1(DISPLAY_X + 2, DISPLAY_Y + 2, 0, 0, "COMM PROBLEM", VideoBuffer);
+#endif
 
                                     timeDelay(5);
 
@@ -4750,9 +6439,21 @@ void main(int argc, char** argv) {
                             case SETUP_WAIT_FOR_CONNECTION: {
                                 clearDisplay(0);
 
+#ifdef BLAZERX
+                                fontEngine1(DISPLAY_X + 3, DISPLAY_Y + 3, 0, 0, "ANSWER MODE", VideoBuffer);
+#else
                                 fontEngine1(DISPLAY_X + 2, DISPLAY_Y + 2, 0, 0, "ANSWER MODE", VideoBuffer);
+#endif
 
+#ifdef BLAZERX
+                                fontEngine1(DISPLAY_X + 6, DISPLAY_Y + 6 + 26, 0, 0, "ENABLED...", VideoBuffer);
+#else
+#ifdef VBE_SUPPORT
+                                fontEngine1(DISPLAY_X + 4, DISPLAY_Y + 4 + 16, 0, 0, "ENABLED...", VideoBuffer);
+#else
                                 fontEngine1(DISPLAY_X + 2, DISPLAY_Y + 2 + 8, 0, 0, "ENABLED...", VideoBuffer);
+#endif
+#endif
 
                                 // open comm port
                                 modemControl(MODEM_DTR_ON);
@@ -4787,7 +6488,11 @@ void main(int argc, char** argv) {
 
                                     clearDisplay(0);
 
+#ifdef BLAZERX
+                                    fontEngine1(DISPLAY_X + 3, DISPLAY_Y + 3, 0, 0, "CONNECTED!", VideoBuffer);
+#else
                                     fontEngine1(DISPLAY_X + 2, DISPLAY_Y + 2, 0, 0, "CONNECTED!", VideoBuffer);
+#endif
 
                                     timeDelay(5);
 
@@ -4800,7 +6505,11 @@ void main(int argc, char** argv) {
 
                                     clearDisplay(0);
 
+#ifdef BLAZERX
+                                    fontEngine1(DISPLAY_X + 3, DISPLAY_Y + 3, 0, 0, "ABORTED...", VideoBuffer);
+#else
                                     fontEngine1(DISPLAY_X + 2, DISPLAY_Y + 2, 0, 0, "ABORTED...", VideoBuffer);
+#endif
 
                                     // play sound fx
                                     digitalFxPlay(BLZABRT_VOC, 1);
@@ -4817,7 +6526,11 @@ void main(int argc, char** argv) {
                                     // print that selection was aborted
                                     clearDisplay(0);
 
+#ifdef BLAZERX
+                                    fontEngine1(DISPLAY_X + 3, DISPLAY_Y + 3, 0, 0, "COMM PROBLEM", VideoBuffer);
+#else
                                     fontEngine1(DISPLAY_X + 2, DISPLAY_Y + 2, 0, 0, "COMM PROBLEM", VideoBuffer);
+#endif
 
                                     timeDelay(5);
 
@@ -4828,7 +6541,11 @@ void main(int argc, char** argv) {
                             case SETUP_SELECT_SHIP: {
                                 clearDisplay(0);
 
+#ifdef BLAZERX
+                                fontEngine1(DISPLAY_X + 3, DISPLAY_Y + 3, 0, 0, "GRYFON  RAPTOR", VideoBuffer);
+#else
                                 fontEngine1(DISPLAY_X + 2, DISPLAY_Y + 2, 0, 0, "GRYFON  RAPTOR", VideoBuffer);
+#endif
 
                                 // draw ships
                                 Displays.currFrame = DISPLAY_IMG_SHIPS;
@@ -4854,7 +6571,11 @@ void main(int argc, char** argv) {
                             case SETUP_SET_COMM_PORT: {
                                 clearDisplay(0);
 
+#ifdef BLAZERX
+                                fontEngine1(DISPLAY_X + 3, DISPLAY_Y + 3, 0, 0, "COMM 1  COMM 2", VideoBuffer);
+#else
                                 fontEngine1(DISPLAY_X + 2, DISPLAY_Y + 2, 0, 0, "COMM 1  COMM 2", VideoBuffer);
+#endif
 
                                 // draw comm ports
                                 Displays.currFrame = DISPLAY_IMG_PORTS;
@@ -4887,7 +6608,11 @@ void main(int argc, char** argv) {
 
                                 clearDisplay(0);
 
+#ifdef BLAZERX
+                                fontEngine1(DISPLAY_X + 3, DISPLAY_Y + 3, 0, 0, "EXITING SYSTEM", VideoBuffer);
+#else
                                 fontEngine1(DISPLAY_X + 2, DISPLAY_Y + 2, 0, 0, "EXITING SYSTEM", VideoBuffer);
+#endif
                             } break;
 
                             default:
@@ -4897,7 +6622,11 @@ void main(int argc, char** argv) {
                 }
 
                 // perform special effects to control panel
+#ifdef BLAZERX
+                panelFx(PANEL_FX_CONTROL);
+#else
                 panelFx();
+#endif
 
                 // slow things down a bit
                 timeDelay(1);
@@ -4916,9 +6645,9 @@ void main(int argc, char** argv) {
                 }
             }
         } else if (GameState == GAME_LINKING) {
+#ifdef BLAZERX
             // a real peer is being negotiated - make sure the AI is off
             AiEnabled = 0;
-#ifdef NET_ENABLED
             // discovery (not the menu) decides who is master: the peer with the
             // higher random nonce wins, so both ends agree regardless of which
             // menu item each player chose
@@ -4988,9 +6717,11 @@ void main(int argc, char** argv) {
                 }
             }
         } else if (GameState == GAME_RUNNING) {
+#ifndef BLAZERX
             // restore palette
             writePalette(&GamePalette);
 
+#endif
             // turn shields off
             shieldControl(THE_PLAYER, 0);
             shieldControl(THE_REMOTE, 0);
@@ -5051,11 +6782,19 @@ void main(int argc, char** argv) {
 
             spriteUnder(&PlayersShip, DoubleBuffer);
 
+#ifdef VBE_SUPPORT
+            pxWindow = PlayersX - VIEW_WIDTH / 2 + SHIP_WIDTH / 2;
+            pyWindow = PlayersY - VIEW_HEIGHT / 2 + SHIP_HEIGHT / 2;
+
+            RemotesShip.x = (RemotesX - pxWindow) * CAM_ZOOM;
+            RemotesShip.y = (RemotesY - pyWindow) * CAM_ZOOM;
+#else
             pxWindow = PlayersX - 160 + 11;
             pyWindow = PlayersY - 100 + 9;
 
             RemotesShip.x = RemotesX - pxWindow;
             RemotesShip.y = RemotesY - pyWindow;
+#endif
 
             spriteUnderClip(&RemotesShip, DoubleBuffer);
 
@@ -5167,7 +6906,11 @@ void main(int argc, char** argv) {
                                 PlayersY + SHIP_HEIGHT / 2,
                                 PlayersXv + 2 * MotionDx[PlayersShip.currFrame],
                                 PlayersYv + 2 * MotionDy[PlayersShip.currFrame],
+#ifdef BLAZERX
+                                MISSILE_COLOR,
+#else
                                 10,
+#endif
                                 PLAYER_MISSILE);
 
                             // update energy
@@ -5351,13 +7094,21 @@ void main(int argc, char** argv) {
                 if (PlayersEngine) {
                     if (++PlayersFlameCount > PlayersFlameTime) {
                         // turn engines on
+#ifdef BLAZERX
+                        PlayersTintColors[1] = vgaColorToRGB32(PlayersEngineColor);
+#else
                         writeColorReg(PLAYERS_ENGINE_REG, &PlayersEngineColor);
+#endif
 
                         // reset counter
                         PlayersFlameCount = 0;
                     } else {
                         // turn engines off
+#ifdef BLAZERX
+                        PlayersTintColors[1] = vgaColorToRGB32(PrimaryBlack);
+#else
                         writeColorReg(PLAYERS_ENGINE_REG, &PrimaryBlack);
+#endif
                     }
                 }
 
@@ -5376,14 +7127,22 @@ void main(int argc, char** argv) {
                                 PlayersShieldColor.blue = 24;
                             }
 
+#ifdef BLAZERX
+                            PlayersTintColors[0] = vgaColorToRGB32(PlayersShieldColor);
+#else
                             writeColorReg(PLAYERS_SHIELD_REG, &PlayersShieldColor);
+#endif
                         } else {
                             // must be a raptor
                             if ((PlayersShieldColor.red += 8) >= 64) {
                                 PlayersShieldColor.red = 24;
                             }
 
+#ifdef BLAZERX
+                            PlayersTintColors[0] = vgaColorToRGB32(PlayersShieldColor);
+#else
                             writeColorReg(PLAYERS_SHIELD_REG, &PlayersShieldColor);
+#endif
                         }
                     }
                 }
@@ -5413,7 +7172,11 @@ void main(int argc, char** argv) {
                 }
 
                 // process the remote ship if a peer is linked or the AI is flying it
+#ifdef BLAZERX
                 if (Linked || AiEnabled) {
+#else
+                if (Linked) {
+#endif
                     // move remote
                     RemotesLastX = RemotesX;
                     RemotesLastY = RemotesY;
@@ -5421,12 +7184,17 @@ void main(int argc, char** argv) {
                     // reset remotes input
                     remotesKeyState = 0;
 
+#ifdef BLAZERX
                     // get input: from the AI in single-player, else from the peer
                     if (AiEnabled) {
                         remotesKeyState = computeRemoteAi();
                     } else {
                         remotesKeyState = serialReadWait();
                     }
+#else
+                    // get input from the peer
+                    remotesKeyState = serialReadWait();
+#endif
 
                     // test if a key is depressed
                     if (RemotesState == ALIVE) {
@@ -5489,7 +7257,11 @@ void main(int argc, char** argv) {
                                     RemotesY + SHIP_HEIGHT / 2,
                                     RemotesXv + 2 * MotionDx[RemotesShip.currFrame],
                                     RemotesYv + 2 * MotionDy[RemotesShip.currFrame],
+#ifdef BLAZERX
+                                    MISSILE_COLOR,
+#else
                                     10,
+#endif
                                     REMOTE_MISSILE);
 
                                 // decrease energy
@@ -5576,13 +7348,21 @@ void main(int argc, char** argv) {
                     if (RemotesEngine) {
                         if (++RemotesFlameCount > RemotesFlameTime) {
                             // turn engines on
+#ifdef BLAZERX
+                            RemotesTintColors[1] = vgaColorToRGB32(RemotesEngineColor);
+#else
                             writeColorReg(REMOTES_ENGINE_REG, &RemotesEngineColor);
+#endif
 
                             // reset counter
                             RemotesFlameCount = 0;
                         } else {
                             // turn engines off
+#ifdef BLAZERX
+                            RemotesTintColors[1] = vgaColorToRGB32(PrimaryBlack);
+#else
                             writeColorReg(REMOTES_ENGINE_REG, &PrimaryBlack);
+#endif
                         }
                     }
 
@@ -5601,14 +7381,22 @@ void main(int argc, char** argv) {
                                     RemotesShieldColor.blue = 24;
                                 }
 
+#ifdef BLAZERX
+                                RemotesTintColors[0] = vgaColorToRGB32(RemotesShieldColor);
+#else
                                 writeColorReg(REMOTES_SHIELD_REG, &RemotesShieldColor);
+#endif
                             } else {
                                 // must be a raptor
                                 if ((RemotesShieldColor.red += 8) >= 64) {
                                     RemotesShieldColor.red = 24;
                                 }
 
+#ifdef BLAZERX
+                                RemotesTintColors[0] = vgaColorToRGB32(RemotesShieldColor);
+#else
                                 writeColorReg(REMOTES_SHIELD_REG, &RemotesShieldColor);
+#endif
                             }
                         }
                     }
@@ -5673,7 +7461,11 @@ void main(int argc, char** argv) {
                 }
 
                 // perform death sequence logic for remote
+#ifdef BLAZERX
                 if ((Linked || AiEnabled) && RemotesState == DYING) {
+#else
+                if (Linked && RemotesState == DYING) {
+#endif
                     // decrement death counter
                     if (--RemotesDeathCount <= 0) {
                         // reset remote to starting position
@@ -5706,11 +7498,19 @@ void main(int argc, char** argv) {
                 spriteUnder(&PlayersShip, DoubleBuffer);
 
                 // translate remote to player
+#ifdef VBE_SUPPORT
+                pxWindow = PlayersX - VIEW_WIDTH / 2 + SHIP_WIDTH / 2;
+                pyWindow = PlayersY - VIEW_HEIGHT / 2 + SHIP_HEIGHT / 2;
+
+                RemotesShip.x = (RemotesX - pxWindow) * CAM_ZOOM;
+                RemotesShip.y = (RemotesY - pyWindow) * CAM_ZOOM;
+#else
                 pxWindow = PlayersX - 160 + 11;
                 pyWindow = PlayersY - 100 + 9;
 
                 RemotesShip.x = RemotesX - pxWindow;
                 RemotesShip.y = RemotesY - pyWindow;
+#endif
 
                 spriteUnderClip(&RemotesShip, DoubleBuffer);
 
@@ -5732,13 +7532,23 @@ void main(int argc, char** argv) {
                             PlayersShip.currFrame += 16;
 
                             // draw the ship with thrust showing
+#ifdef BLAZERX
+                            spriteDrawTinted(&PlayersShip, DoubleBuffer, 1,
+                                PlayersTintColors, 2);
+#else
                             spriteDraw(&PlayersShip, DoubleBuffer, 1);
+#endif
 
                             // restoire the original frame
                             PlayersShip.currFrame -= 16;
                         } else {
                             // no engines
+#ifdef BLAZERX
+                            spriteDrawTinted(&PlayersShip, DoubleBuffer, 1,
+                                PlayersTintColors, 2);
+#else
                             spriteDraw(&PlayersShip, DoubleBuffer, 1);
+#endif
                         }
                     } else {
                         // player is cloaked
@@ -5772,13 +7582,23 @@ void main(int argc, char** argv) {
                             RemotesShip.currFrame += 16;
 
                             // draw the ship with thrust showing
+#ifdef BLAZERX
+                            spriteDrawTinted(&RemotesShip, DoubleBuffer, 1,
+                                RemotesTintColors, 2);
+#else
                             spriteDrawClip(&RemotesShip, DoubleBuffer, 1);
+#endif
 
                             // restore the original frame
                             RemotesShip.currFrame -= 16;
                         } else {
                             // no engines
+#ifdef BLAZERX
+                            spriteDrawTinted(&RemotesShip, DoubleBuffer, 1,
+                                RemotesTintColors, 2);
+#else
                             spriteDrawClip(&RemotesShip, DoubleBuffer, 1);
+#endif
                         }
                     } else {
                         // player is cloaked
@@ -5810,19 +7630,53 @@ void main(int argc, char** argv) {
                 fontEngine1(0, 0, 0, 0, buffer, DoubleBuffer);
 
                 sprintf(buffer, "SCORE: %d", PlayersScore);
+#ifdef BLAZERX
+                fontEngine1(800, 0, 0, 0, buffer, DoubleBuffer);
+#else
+#ifdef VBE_SUPPORT
+                fontEngine1(500, 0, 0, 0, buffer, DoubleBuffer);
+#else
                 fontEngine1(250, 0, 0, 0, buffer, DoubleBuffer);
+#endif
+#endif
 
+#ifdef BLAZERX
                 #if DEBUG
                 // diagnostic stuff
                 sprintf(buffer, "REMOTE:[%d,%d]    ", RemotesX, RemotesY);
-                fontEngine1(0, 10, 0, 0, buffer, DoubleBuffer);
+                fontEngine1(0, 32, 0, 0, buffer, DoubleBuffer);
 
                 sprintf(buffer, "SENT: R=%d L=%d U=%d", sentRight, sentLeft, sentUp);
-                fontEngine1(0, 20, 0, 0, buffer, DoubleBuffer);
+                fontEngine1(0, 64, 0, 0, buffer, DoubleBuffer);
 
                 sprintf(buffer, "REC: R=%d L=%d U=%d ", recRight, recLeft, recUp);
-                fontEngine1(0, 30, 0, 0, buffer, DoubleBuffer);
+                fontEngine1(0, 96, 0, 0, buffer, DoubleBuffer);
                 #endif
+#else
+                #if DEBUG
+                // diagnostic stuff
+                sprintf(buffer, "REMOTE:[%d,%d]    ", RemotesX, RemotesY);
+#ifdef VBE_SUPPORT
+                fontEngine1(0, 20, 0, 0, buffer, DoubleBuffer);
+#else
+                fontEngine1(0, 10, 0, 0, buffer, DoubleBuffer);
+#endif
+
+                sprintf(buffer, "SENT: R=%d L=%d U=%d", sentRight, sentLeft, sentUp);
+#ifdef VBE_SUPPORT
+                fontEngine1(0, 40, 0, 0, buffer, DoubleBuffer);
+#else
+                fontEngine1(0, 20, 0, 0, buffer, DoubleBuffer);
+#endif
+
+                sprintf(buffer, "REC: R=%d L=%d U=%d ", recRight, recLeft, recUp);
+#ifdef VBE_SUPPORT
+                fontEngine1(0, 60, 0, 0, buffer, DoubleBuffer);
+#else
+                fontEngine1(0, 30, 0, 0, buffer, DoubleBuffer);
+#endif
+                #endif
+#endif
 
                 // display double buffer
                 displayDoubleBuffer(DoubleBuffer, 0);
@@ -5846,7 +7700,15 @@ void main(int argc, char** argv) {
             // test if there is a winner or user just decided to exit
             if (Winner == WINNER_REMOTE) {
                 // tell player remote is winner
+#ifdef BLAZERX
+                techPrint(410, 256, "CEASE COMBAT!", VideoBuffer);
+#else
+#ifdef VBE_SUPPORT
+                techPrint(256, 160, "CEASE COMBAT!", VideoBuffer);
+#else
                 techPrint(128, 80, "CEASE COMBAT!", VideoBuffer);
+#endif
+#endif
 
                 if (MusicEnabled) {
                     musicStop();
@@ -5855,11 +7717,27 @@ void main(int argc, char** argv) {
 
                 timeDelay(25);
                 digitalFxPlay(BLZLOS_VOC, 2);
+#ifdef BLAZERX
+                techPrint(384, 320, "YOU ARE DEFEATED", VideoBuffer);
+#else
+#ifdef VBE_SUPPORT
+                techPrint(240, 200, "YOU ARE DEFEATED", VideoBuffer);
+#else
                 techPrint(120, 100, "YOU ARE DEFEATED", VideoBuffer);
+#endif
+#endif
                 timeDelay(50);
             } else if (Winner == WINNER_PLAYER) {
                 // tell player he is winner
+#ifdef BLAZERX
+                techPrint(410, 256, "CEASE_COMBAT!", VideoBuffer);
+#else
+#ifdef VBE_SUPPORT
+                techPrint(256, 160, "CEASE_COMBAT!", VideoBuffer);
+#else
                 techPrint(128, 80, "CEASE_COMBAT!", VideoBuffer);
+#endif
+#endif
 
                 if (MusicEnabled) {
                     musicStop();
@@ -5868,7 +7746,15 @@ void main(int argc, char** argv) {
 
                 timeDelay(25);
                 digitalFxPlay(BLZWIN_VOC, 2);
+#ifdef BLAZERX
+                techPrint(368, 320, "YOU ARE VICTORIOUS", VideoBuffer);
+#else
+#ifdef VBE_SUPPORT
+                techPrint(230, 200, "YOU ARE VICTORIOUS", VideoBuffer);
+#else
                 techPrint(115, 100, "YOU ARE VICTORIOUS", VideoBuffer);
+#endif
+#endif
                 timeDelay(50);
             }
 
@@ -5903,13 +7789,13 @@ void main(int argc, char** argv) {
     // close down music
     musicClose();
 
-#ifdef NET_ENABLED
+#ifdef BLAZERX
     // release the packet handle, DPMI callback and DOS buffers
     if (NetReady) {
         netShutdown();
     }
-#endif
 
+#endif
     setGraphicsMode(TEXT_MODE);
 
     // see ya!

@@ -17,6 +17,8 @@ A hand-converted port of every demo and engine module from André LaMothe's 1995
 - [Audio](#audio)
 - [Single-player AI](#single-player-ai)
 - [Networking (LAN play)](#networking-lan-play)
+- [SVGA (VESA)](#svga-vesa)
+  - [Starblazer and the camera pattern](#starblazer-and-the-camera-pattern)
 - [Credits and license](#credits-and-license)
 
 ## What this is
@@ -29,7 +31,7 @@ LaMothe's *Black Art of 3D Game Programming* (1995, Waite Group Press) was the c
 
 This repository is a faithful port of all of that material to **Open Watcom 2.0 beta** (community fork) with a consistent modern C99 coding style, building as Watcom IDE projects (`.wpj` / `.tgt`). Both real-mode 16-bit (Watcom IDE system identifier `de6en`) and DOS/4GW 32-bit (`dr2en`) variants exist for the larger demos.
 
-On top of that port, it adds original work the book didn't have — chiefly an **IPX LAN-multiplayer layer for Starblazer** (16- and 32-bit, with cross-play; see [Networking](#networking-lan-play)) — and patches a number of latent bugs in the original source, including some that only surface in two-player (see [Notable fixes](#notable-fixes-vs-the-book-code)).
+On top of that port, it adds original work the book didn't have — chiefly an **IPX LAN-multiplayer layer for Starblazer** (32-bit, combined with the VESA port and the AI into one definitive build, `blazerx/`; see [Networking](#networking-lan-play)) and **runtime SVGA (VESA) support merged directly into the mode-13h engine** (`black3`/`black4`, 32-bit only), with higher-resolution ports of the book's graphics demos (see [SVGA (VESA)](#svga-vesa)) — and patches a number of latent bugs in the original source, including some that only surface in two-player (see [Notable fixes](#notable-fixes-vs-the-book-code)).
 
 ## Build requirements
 
@@ -47,8 +49,8 @@ blackart3d/
 ├── .gitignore                           # excludes build artifacts (.obj, .exe, .lst, .map, etc.)
 ├── .gitattributes
 ├── engine/                              # shared engine library
-│   ├── black3.{c,h}                     # video / palette / BIOS / mode 13h + Mode Z
-│   ├── black4.{c,h}                     # double buffer, bitmaps, sprites, PCX
+│   ├── black3.{c,h}                     # video / palette / BIOS / mode 13h + SVGA (VESA) + Mode Z
+│   ├── black4.{c,h}                     # double buffer, bitmaps, sprites (incl. tinted), PCX — mode 13h + SVGA
 │   ├── black5.{c,h}                     # keyboard ISR, mouse, joystick
 │   ├── black6.{c,h}                     # DIGPAK / MIDPAK sound and music
 │   ├── black8.{c,h}                     # timer
@@ -64,8 +66,9 @@ blackart3d/
 ├── chap02/ – chap18/                    # 16-bit demos for each chapter
 ├── ch09_32, ch14_32, ch15_32,           # 32-bit DOS/4GW project variants
 │   ch16_32, ch17_32, ch18_32/
-├── blzrx/                              # 16-bit Starblazer + LAN network play (shares chap09/blazer.c)
-├── blzrx32/                            # 32-bit Starblazer + LAN network play (shares chap09/blazer.c)
+├── blazerx/                             # 32-bit VESA Starblazer + IPX LAN play + AI (the definitive build)
+├── vbe/                               # 32-bit SVGA (VESA) ports of the book's graphics demos
+│   └── chap03/, …                      #   one subfolder per chapter, mirroring chap*/
 ├── audio/                               # DIGPAK / MIDPAK driver TSRs and patch files
 └── exp_font/                            # utility — dumps the BIOS 8x8 ROM font to font.bin
                                          # (needed by 32-bit builds since flat mode can't reach 0xF000:FA6E)
@@ -77,8 +80,8 @@ The engine is split across multiple `black*` modules following the book's chapte
 
 | Module | Purpose | Key APIs |
 |---|---|---|
-| `black3` | VGA mode 13h / Mode Z, palette, BIOS access, vertical/horizontal lines, fonts | `setGraphicsMode`, `setModeZ`, `writePalette`, `lineH/V`, `printString` |
-| `black4` | Double buffering, bitmaps, PCX loading, sprites | `createDoubleBuffer`, `pcxLoad`, `spriteInit`, `spriteDraw` |
+| `black3` | VGA mode 13h always; SVGA (VESA VBE, 32-bit only, at any resolution/bpp) when built with `-dVBE_SUPPORT` — that build's mode-13h/VESA state is runtime (`DisplayWidth`/`DisplayHeight`/`DisplayPitch`/`DisplayBpp`), not fixed per-resolution, so one `VBE_SUPPORT` binary can switch resolution/bpp while running; a build without `VBE_SUPPORT` gets the fixed-320×200×8 engine instead, with none of that runtime state or VESA capability compiled in at all (see [16-bit vs. 32-bit builds](#16-bit-vs-32-bit-builds) and [SVGA (VESA)](#svga-vesa)) | `setGraphicsMode`, `setGraphicsModeVesa`, `setModeZ`, `writePalette`, `lineH/V`, `printString` |
+| `black4` | Double buffering, bitmaps, PCX loading (256-color indexed or 24-bit true color), sprites (incl. tinted, for palette-free shield/glow effects), parallax layers, screen transitions — all bpp/resolution-generic via `black3`'s runtime state | `createDoubleBuffer`, `pcxLoad`, `spriteInit`, `spriteDraw`, `spriteDrawTinted` |
 | `black5` | Keyboard ISR (custom INT 9 handler), mouse via INT 33h, joystick port | `keyboardInstallDriver`, `KeyboardState[]`, `mouseControl`, `getScanCode` |
 | `black6` | DIGPAK (.VOC) sound and MIDPAK (.XMI) music via INT 66h TSRs | `soundLoad`, `soundPlay`, `musicLoad`, `musicPlay` — works in 16-bit and 32-bit (32-bit bridges through `engine/dpmi.c`) |
 | `dpmi`   | 32-bit only: DPMI INT 31h bridge to real-mode TSRs and DOS conventional memory | `dpmiRealModeInt`, `dpmiAllocDos`, `dpmiFreeDos`, `dpmiGetVector`, `dpmiAllocRealCallback`, `dpmiFreeRealCallback` |
@@ -125,7 +128,13 @@ The larger demos (and chapters that benefit from flat-mode memory) have parallel
 | `ch16_32/` | `vox_32`, `voxt_32`, `voxo_32` | `../chap16/{voxel,voxtile,voxopt}.c` | |
 | `ch17_32/` | `blz3d_32` | `../chap17/blaze3d.c` | Includes `_32.asm` rasterizer files |
 | `ch18_32/` | `krk_32` | `../chap18/krk.c` | Kill or Be Killed — same `_32.asm` rasterizer set as `ch17_32` |
-| `blzrx32/` | `blzrx32` | `../chap09/blazer.c` | Starblazer with **LAN network play** (IPX via the DPMI bridge) — adds `engine/ipx.c`, defines `NET_ENABLED`. See [Networking](#networking-lan-play). |
+| `blazerx/` | `blazerx` | `blazerx/blazerx.c` (own copy) | **The definitive Starblazer**: 32-bit VESA (640×480) + **IPX LAN play** (via the DPMI bridge, `engine/ipx.c`) + single-player AI. See [Networking](#networking-lan-play). |
+| `vbe/chap03/` | `svga`, `svga_m16`, `svga_l32`, `light` | `chap03/{mode13,light}.c` (`-dVBE_SUPPORT` [+`_M16`/`_L32`]) | **SVGA (VESA)** ports of the chap03 video-mode demos at 640×480×256, 800×600×16bpp, and 1024×768×32bpp — all three compiled from `chap03/mode13.c`, compiled from the same source as the book original. See [SVGA (VESA)](#svga-vesa). |
+| `vbe/chap04/` | `pcxdemo`, `worms`, `alien`, `speed`, `spheres` | `chap04/*.c` (`-dVBE_SUPPORT`) | SVGA ports of all five chap04 demos: PCX loading, sprite animation, parallax scrolling, palette cycling. `spheres` swaps the book's Mode Z page-flip for software double buffering (VESA has no Mode Z equivalent). |
+| `vbe/chap05/` | `keytest`, `ship`, `mousetst`, `joytest` | `chap05/*.c` (`-dVBE_SUPPORT`) | SVGA ports of all four chap05 input demos: keyboard ISR (palette cycling), keyboard ship (A/D rotate, W/S thrust), mouse hammer+ant, joystick ship. |
+| `vbe/chap07/` | `critters`, `floater`, `jumper`, `lockon`, `lostnspc` | `chap07/*.c` (`-dVBE_SUPPORT`) | SVGA ports of all five chap07 sprite-animation demos: pixel-critter convergence, terrain-following speeder, pattern-motion spider, tracking/evasion alien+creature (keyboard, black5.h), random-wander ship with vapor trail. |
+| `vbe/chap08/` | `jelly`, `volcano` | `chap08/*.c` (`-dVBE_SUPPORT`) | SVGA ports of the two graphical chap08 demos: jellyfish sprite animation (real timer ISR in the mode-13h build; position updated in the main loop under `VBE_SUPPORT`, since `_asm sti` GPFs under DOS/4GW), volcanic cinder particle simulation. |
+| `vbe/chap09/` | `blazer` | `chap09/blazer.c` (`-dVBE_SUPPORT`) | SVGA port of **Starblazer** at 640×480, book-faithful (real modem/serial link, no IPX) — the first full-game (not static demo) port; see [SVGA (VESA) § Starblazer and the camera pattern](#starblazer-and-the-camera-pattern). `blazerx/` (above) forks from this file and adds IPX + is the recommended way to actually play. |
 
 ## Coding style
 
@@ -185,7 +194,7 @@ Two robustness fixes in the modem driver ([engine/black9.c](engine/black9.c)), w
 - **`int` size**: 16-bit (2 bytes) vs. 32-bit (4 bytes). Several book bugs were latent in 16-bit because `int` arithmetic stayed in 16-bit range; they manifested when `int` grew to 32 bits and the same overflow patterns produced larger out-of-range values.
 - **Far pointers**: `FAR` is a real keyword in 16-bit, a no-op macro in 32-bit. Pointer construction via `_FP_SEG`/`_FP_OFF` doesn't work in 32-bit; the code uses `MK_FP` from `<dos.h>` instead.
 - **VGA buffer**: `0xA0000000` (real-mode segment:offset) in 16-bit vs. `0xA0000` (flat linear address) in 32-bit.
-- **ROM character set**: at `0xF000:FA6E` in real mode. In 32-bit flat mode that address is unreachable — the `exp_font/` utility extracts the font to `font.bin` and 32-bit builds load it via `initRomCharSet`.
+- **ROM character set**: at `0xF000:FA6E` in real mode. In 32-bit flat mode that address is unreachable — the `exp_font/` utility extracts the font to `font.bin` (plus scaled `font16.bin`/`font24.bin`/`font32.bin` variants for `VBE_SUPPORT` builds). A plain 32-bit build loads the fixed 8×8 `font.bin` via `initRomCharSet()`; a `VBE_SUPPORT` build loads any of the sizes via `loadFontSet(filename, size)` instead (see [vbe/PORTING.md](vbe/PORTING.md)).
 - **Inner-loop rasterizers**: 16-bit uses `.asm` files (`fpdiv`, `qcpy`, `tri_fp`, etc.); 32-bit uses parallel `_32.asm` files (`fpdiv_32`, `qcpy_32`, `tri_fp_32`). The 32-bit asm explicitly preserves callee-saved registers via Watcom's `USES` clause.
 - **Sound / music**: DIGPAK and MIDPAK are real-mode TSRs hooked via INT 66h. Calling them from 32-bit DOS/4GW requires a DPMI bridge — `engine/dpmi.c` provides the wrappers (`dpmiRealModeInt` for INT 31h func 0300h to simulate the real-mode interrupt, `dpmiAllocDos` for INT 31h func 0100h to allocate DOS conventional memory shared between real and protected mode, `dpmiGetVector` for func 0200h to read the real-mode IVT). The 32-bit branch of `engine/black6.c` allocates VOC / XMIDI / SndStruc storage in DOS memory, builds real-mode `seg:off` FAR pointers inside the SndStruc by hand, and dispatches each INT 66h call through DPMI. Two 32-bit-specific subtleties:
   - **`SndStruc` is `#pragma pack(1)`'d** in `engine/black6.h` — DIGPAK is real-mode code expecting the 12-byte unpacked layout. Watcom 32-bit's default `-zp8` would otherwise insert 2 bytes of padding before `isPlaying` and shift `frequency` to offset 12, causing playback at the wrong sample rate. A `SndStrucPackedCheck` typedef makes the build fail if anyone removes the pragma.
@@ -209,14 +218,14 @@ chap17/blaze3d.wpj          # 16-bit Starblazer 3-D
 ch17_32/blz3d_32.wpj        # 32-bit Starblazer 3-D
 chap18/krk.wpj              # 16-bit Kill or Be Killed
 ch18_32/krk_32.wpj          # 32-bit Kill or Be Killed
-blzrx/blzrx.wpj           # 16-bit Starblazer with LAN network play
-blzrx32/blzrx32.wpj       # 32-bit Starblazer with LAN network play
+blazerx/blazerx.wpj       # 32-bit VESA Starblazer with IPX LAN play + AI (the definitive build)
+vbe/chap03/svga.wpj      # 32-bit SVGA (VESA) port of the chap03 mode-13h demo
 ...
 ```
 
 Each chapter's project includes the necessary engine modules (`black3.c`, `black4.c`, ...). 32-bit projects also include the `_32.asm` files when needed.
 
-The 16-bit projects produce ~50–100 KB MZ `.exe`s. The 32-bit projects produce a small MZ stub + the LE body, requiring `dos4gw.exe` (bundled in the project directories) at runtime.
+The 16-bit projects produce ~50–100 KB MZ `.exe`s. The 32-bit projects produce a small MZ stub + the LE body, which needs the DOS/4GW extender at runtime — **DOSBox-X provides DOS/4GW built-in**, so no `dos4gw.exe` file is bundled (on real DOS you'd supply `dos4gw.exe` on the path).
 
 ## Running under DOSBox-X
 
@@ -253,7 +262,7 @@ The TSRs hook INT 66h; the engine calls them via inline assembly stubs in `engin
 
 ### Music file format
 
-MIDPAK plays **XMIDI (`.XMI`)** files only — it does not play standard `.MID` files. The only `.XMI` files kept in this repo are the book's **own** game soundtracks: `BLAZEMUS.XMI` (Starblazer, in `chap06/`, `chap09/`, and the `blzrx*` dirs) and `KRKMUS.XMI` (Kill or Be Killed, in `chap18/`). To exercise `chap06/mididemo.c`, enter `BLAZEMUS.XMI` at the prompt, or drop in any `.XMI` file you have the rights to and enter its name.
+MIDPAK plays **XMIDI (`.XMI`)** files only — it does not play standard `.MID` files. The only `.XMI` files kept in this repo are the book's **own** game soundtracks: `BLAZEMUS.XMI` (Starblazer, in `chap06/`, `chap09/`, `vbe/chap09/`, and `blazerx/`) and `KRKMUS.XMI` (Kill or Be Killed, in `chap18/`). To exercise `chap06/mididemo.c`, enter `BLAZEMUS.XMI` at the prompt, or drop in any `.XMI` file you have the rights to and enter its name.
 
 32-bit DOS/4GW builds use the DPMI bridge in `engine/dpmi.c` to reach the real-mode TSRs. The same `SOUNDRV.COM` / `MIDPAK.COM` setup applies — load them before launching the 32-bit executable, identical to the 16-bit flow. The bridge transparently allocates DOS conventional memory for the VOC and XMIDI buffers via INT 31h func 0100h and dispatches each INT 66h call through INT 31h func 0300h.
 
@@ -267,9 +276,9 @@ It was one of several such systems. For the wider picture: **Miles AIL / Miles S
 
 ## Single-player AI
 
-The book's **Play Solo** menu item originally dropped you into the arena alone — the enemy ship sat inert at its spawn as a stationary target for practice. This port turns Solo into an actual single-player mode: the enemy ship is flown by a small **AI opponent** that hunts you down, lines up shots, fires, and raises its shields against incoming fire.
+**AI is a `blazerx`-only feature.** The book's **Play Solo** menu item originally dropped you into the arena alone, and the plain `blazer`/`blazer32`/`ch09_32`/`vbe/chap09` builds all keep that book-faithful behavior — the enemy ship just sits inert at its spawn as a stationary target for practice, no link setup needed. Only **`blazerx/blazerx.c`** (32-bit VESA + IPX; see [Networking](#networking-lan-play)) adds a small **AI opponent** that hunts you down, lines up shots, fires, and raises its shields against incoming fire, so Solo is an actual single-player mode there.
 
-The implementation reuses the game's existing two-player machinery rather than bolting on a parallel code path. In Starblazer the "remote" (enemy) ship is already simulated *locally* on each machine from a one-byte input of `REMOTE_*` action flags (turn left/right, thrust, fire, shields, cloak); in head-to-head play that byte arrives over the link each frame (`serialReadWait()`), and the same code re-simulates the remote ship, its collisions, death, and rendering. The AI simply **synthesizes that input byte** instead of reading it from the network — every frame `computeRemoteAi()` (in [chap09/blazer.c](chap09/blazer.c)) decides which "keys" the enemy presses, and the unchanged remote simulation does the rest. A single `AiEnabled` flag swaps the input source and opens the collision/death paths that were previously gated on a live link.
+The implementation reuses the game's existing two-player machinery rather than bolting on a parallel code path. In Starblazer the "remote" (enemy) ship is already simulated *locally* on each machine from a one-byte input of `REMOTE_*` action flags (turn left/right, thrust, fire, shields, cloak); in head-to-head play that byte arrives over the link each frame (`serialReadWait()`), and the same code re-simulates the remote ship, its collisions, death, and rendering. The AI simply **synthesizes that input byte** instead of reading it from the network — every frame `computeRemoteAi()` (in [blazerx/blazerx.c](blazerx/blazerx.c)) decides which "keys" the enemy presses, and the unchanged remote simulation does the rest. A single `AiEnabled` flag swaps the input source and opens the collision/death paths that were previously gated on a live link.
 
 The enemy runs a small **behavior state machine** that cycles between three modes. It mostly **circles you (Strafe)**, mixing in shorter aggressive pushes and the occasional break:
 
@@ -277,21 +286,23 @@ The enemy runs a small **behavior state machine** that cycles between three mode
 - **Hunt** — close to a short distance, then pace the player and fire. The aggressive mode; this is where the heaviest shooting happens.
 - **Flee** — back off to reposition (holding fire), and where it retreats to conserve power when its *own* energy runs low.
 
-**Smooth movement was the hard part, and the fix is the important bit:** the enemy steers its **velocity**, not its position. Each frame it computes a *target velocity* — the player's own velocity, plus a small per-behavior maneuver (toward you for Hunt, sideways for Strafe, away for Flee) — and only thrusts to correct the difference. Chasing a *position* with momentum is what made earlier versions spin, weave, and jerk: the bearing to a fast-moving player swings wildly, the ship overshoots and loops, and because the camera is locked to the player anything not matching the player's velocity lurches across the screen. Pacing the player's *velocity* fixes all three at once — the enemy glides, never builds runaway momentum, and (since it's then free to point at you) faces you and shoots. When its velocity already matches the target it simply faces the player, which is the common, calm-looking case. A hard backstop (`AI_RETURN_DIST` / `AI_LEASH_X` / `AI_LEASH_Y`) still drags it back if it's ever knocked out of view. Tuning lives in the `AI_*` knobs near the top of [chap09/blazer.c](chap09/blazer.c) — `AI_MANEUVER` (maneuver speed), `AI_VEL_TOL` (how loosely it matches before it stops correcting and shoots), the per-state distances, and the fire-rate set.
+**Smooth movement was the hard part, and the fix is the important bit:** the enemy steers its **velocity**, not its position. Each frame it computes a *target velocity* — the player's own velocity, plus a small per-behavior maneuver (toward you for Hunt, sideways for Strafe, away for Flee) — and only thrusts to correct the difference. Chasing a *position* with momentum is what made earlier versions spin, weave, and jerk: the bearing to a fast-moving player swings wildly, the ship overshoots and loops, and because the camera is locked to the player anything not matching the player's velocity lurches across the screen. Pacing the player's *velocity* fixes all three at once — the enemy glides, never builds runaway momentum, and (since it's then free to point at you) faces you and shoots. When its velocity already matches the target it simply faces the player, which is the common, calm-looking case. A hard backstop (`AI_RETURN_DIST` / `AI_LEASH_X` / `AI_LEASH_Y`) still drags it back if it's ever knocked out of view. Tuning lives in the `AI_*` knobs near the top of [blazerx/blazerx.c](blazerx/blazerx.c) — `AI_MANEUVER` (maneuver speed), `AI_VEL_TOL` (how loosely it matches before it stops correcting and shoots), the per-state distances, and the fire-rate set.
 
 **Cloak blinds it.** The enemy can only track the player while the player is visible — the instant you engage your cloaking device it loses the lock. It remembers the last spot it saw you, steers toward *that* point, and holds fire until you decloak, so the cloak genuinely shakes its aim and lets you slip away and reposition (the view follows you, so it falls behind off-screen until you reappear). And on defense, it raises its own shields only against a missile that is both close *and* actually closing in on it — not any shot that happens to drift past — so its shielding reads as a deliberate reaction rather than random flicker.
 
 **Shields are a committed cooldown ability** for both ships. Raising shields commits them for a fixed ~5.5-second window that can't be dropped early, after which they must recharge for another ~5.5 seconds before they can be raised again (`SHIELD_ON_TIME` / `SHIELD_COOLDOWN_TIME`). This replaces the old behavior where shields could be re-triggered the instant they expired — which, combined with the AI reacting to every passing shot, made the enemy's shields flicker on and off. Now both you and the enemy have to time a single shield window and then ride out the recharge.
 
-The underlying mechanics are shared with the player and deliberately classic-arcade: it aims by picking, of the 16 ship headings, the one whose motion vector best matches the target direction (integer dot-product, no trig) and rotates one step per frame toward it — the same turn rate you have; and it thrusts and fires under the same velocity cap, energy costs, and space-friction the player ship obeys. All the tuning lives in named `AI_*` `#define`s at the top of [chap09/blazer.c](chap09/blazer.c) (fire range, cooldown, max shots in flight, thrust stand-off, shield reaction), so the difficulty is a one-line change.
+The underlying mechanics are shared with the player and deliberately classic-arcade: it aims by picking, of the 16 ship headings, the one whose motion vector best matches the target direction (integer dot-product, no trig) and rotates one step per frame toward it — the same turn rate you have; and it thrusts and fires under the same velocity cap, energy costs, and space-friction the player ship obeys. All the tuning lives in named `AI_*` `#define`s at the top of [blazerx/blazerx.c](blazerx/blazerx.c) (fire range, cooldown, max shots in flight, thrust stand-off, shield reaction), so the difficulty is a one-line change.
 
-Because the AI ship is a normal remote ship, it is fully part of the world: it dies to your missiles and to asteroids, its kills end the match, it shows up on the scanner, and it takes the opposite ship type (Gryfon vs. Raptor) from the one you picked. To play, just choose **Play Solo** from the setup menu — no link setup, no second instance. The AI path is in the shared `chap09/blazer.c`, so every Starblazer build (`blazer`, `blzrx`, `blzrx32`) gets it.
+Because the AI ship is a normal remote ship, it is fully part of the world: it dies to your missiles and to asteroids, its kills end the match, it shows up on the scanner, and it takes the opposite ship type (Gryfon vs. Raptor) from the one you picked. To play, just choose **Play Solo** from the setup menu — no link setup, no second instance. `chap09/blazer.c`, `vbe/chap09/blazer.c`, and every other Starblazer variant deliberately do **not** carry the AI — it lives only in `blazerx/blazerx.c`, alongside the IPX code it shares its input-synthesis trick with.
 
 ## Networking (LAN play)
 
-Starblazer (`chap09/blazer.c`) gets **head-to-head play over a LAN** using **IPX** — the protocol real DOS multiplayer games (DOOM, Duke3D, Warcraft, Descent) actually used. This replaces the book's null-modem / dial-up serial link. The networking layer is gated behind the `NET_ENABLED` macro (defined only by the net project files), so the stock `chap09/blazer.wpj` build doesn't pull in the IPX code.
+**`blazerx/`** is the definitive Starblazer build: 32-bit DOS/4GW, the VESA 640×480 port, **IPX LAN play**, and the single-player AI, all in one `.exe`. It gets **head-to-head play over a LAN** using **IPX** — the protocol real DOS multiplayer games (DOOM, Duke3D, Warcraft, Descent) actually used — in place of the book's null-modem / dial-up serial link.
 
-Two playable builds share `chap09/blazer.c`: **`blzrx/`** (16-bit real mode — `blzrx.exe`, no `dos4gw.exe` needed) and **`blzrx32/`** (32-bit DOS/4GW — `blzrx32.exe`). Both speak IPX and interoperate — 16-bit↔32-bit cross-play works. They differ only in how they reach the real-mode IPX entry: the 16-bit build far-calls it directly; the 32-bit build bridges through DPMI (INT 31h `0300h` to fetch the entry, `0301h` to far-call it) with ECBs/buffers in DOS conventional memory. Both define `NET_ENABLED`; only `blzrx32` adds `DOS_32_BIT`.
+`blazerx/blazerx.c` is a copy of the VESA port (`vbe/chap09/blazer.c`) with the IPX serial-link shim merged in: the game's `serialWrite`/`serialReadWait`/`makeConnection`/etc. call sites redirect to the IPX transport. It reaches the real-mode IPX entry through the DPMI bridge (INT 31h `0300h` to fetch it, `0301h` to far-call it), with ECBs/buffers in DOS conventional memory — the same mechanism `black3.c`'s `setGraphicsModeVesa` already uses to talk to the VBE BIOS. It's a 32-bit DOS/4GW build, and two `blazerx` instances pair with each other over IPX.
+
+The plain `blazer`/`blazer32` builds (`chap09/`, `ch09_32/`) are unaffected — they stay the book-faithful mode-13h demo with real modem/serial networking, no IPX, no VESA.
 
 ### Requirements
 
@@ -315,33 +326,34 @@ Then bring up the IPX-over-UDP tunnel from the DOS prompt: `IPXNET STARTSERVER` 
 
 ### Transport shim
 
-The game's serial call sites are left verbatim and redirected at compile time (in `chap09/blazer.c`, under `#ifdef NET_ENABLED`): `serialWrite` / `serialReadWait` / `makeConnection` / `serialFlush` / etc. become an IPX byte-FIFO. Starblazer's lockstep protocol (write a byte, then a blocking read, every frame) maps to **flush-on-read** — each read ships pending writes as one datagram, then pumps `netPoll()` until the peer's datagram arrives. A tiny stop-and-wait sequence/ack layer rides on top so a lost datagram self-heals instead of desyncing the lockstep, with a timeout so a vanished peer degrades instead of hanging.
+The game's serial call sites are left verbatim and permanently redirected onto the IPX transport in `blazerx/blazerx.c`: `serialWrite` / `serialReadWait` / `makeConnection` / `serialFlush` / etc. become an IPX byte-FIFO (see the "Serial-link compatibility shim" block right before `main()`). Starblazer's lockstep protocol (write a byte, then a blocking read, every frame) maps to **flush-on-read** — each read ships pending writes as one datagram, then pumps `netPoll()` until the peer's datagram arrives. A tiny stop-and-wait sequence/ack layer rides on top so a lost datagram self-heals instead of desyncing the lockstep, with a timeout so a vanished peer degrades instead of hanging.
 
 ### Playing
 
-Bring up IPX (above) and run `blzrx.exe` / `blzrx32.exe` on both instances — or just use the ready-made configs below, which do it for you. From the setup menu one player picks **Wait for Connection** (host → Master) and the other picks **Make Connection** (joiner → Slave); the "phone number" prompt is ignored under IPX, so just press Enter. They auto-discover, exchange RNG seed + ship type, and drop into the game.
+Bring up IPX (above) and run `blazerx.exe` on both instances — or just use the ready-made configs below, which do it for you. From the setup menu one player picks **Wait for Connection** (host → Master) and the other picks **Make Connection** (joiner → Slave); the "phone number" prompt is ignored under IPX, so just press Enter. They auto-discover, exchange RNG seed + ship type, and drop into the game.
 
 ### Ready-to-run DOSBox-X configs (`dosbox/`)
 
 The [dosbox/](dosbox/) folder has paired config files for every two-player demo. Each one launches a single instance: it sets up the link (IPX or modem), mounts the right build directory as `C:`, and **auto-runs the program** — so a two-player test on one PC is just two launches. The configs use **relative paths, so run them from the repository root** (DOSBox-X resolves `mount` against the shell's working directory — there's nothing machine-specific to edit). Start the **host / server / answer** side first:
 
 ```
-dosbox-x -conf dosbox/blzrx-host.conf
-dosbox-x -conf dosbox/blzrx-join.conf
+dosbox-x -conf dosbox/blazerx-host.conf
+dosbox-x -conf dosbox/blazerx-join.conf
 ```
 
-(Run with the repo root as the working directory so the relative `mount` resolves. If `dosbox-x` isn't on your PATH, use its full path, e.g. `"C:\DOSBox-X\dosbox-x.exe" -conf dosbox\blzrx-host.conf`. On PowerShell, from the repo root: `Start-Process "C:\DOSBox-X\dosbox-x.exe" -ArgumentList '-conf','dosbox\blzrx-host.conf' -WorkingDirectory .` opens a window without blocking the shell.)
+(Run with the repo root as the working directory so the relative `mount` resolves. If `dosbox-x` isn't on your PATH, use its full path, e.g. `"C:\DOSBox-X\dosbox-x.exe" -conf dosbox\blazerx-host.conf`. On PowerShell, from the repo root: `Start-Process "C:\DOSBox-X\dosbox-x.exe" -ArgumentList '-conf','dosbox\blazerx-host.conf' -WorkingDirectory .` opens a window without blocking the shell.)
 
 | Demo | Link | Configs — launch ① then ② | In-game |
 |---|---|---|---|
-| **blzrx** (16-bit) | IPX | `blzrx-host.conf` · `blzrx-join.conf` | ① Wait for Connection  ② Make Connection (Enter at the number prompt) |
-| **blzrx32** (32-bit) | IPX | `blzrx32-host.conf` · `blzrx32-join.conf` | same as blzrx |
+| **SVGA demos** | — | `svga-demos.conf` (single instance) | Mounts `vbe\chap03` as `C:`; type `svga`, `svga_m16`, or `svga_l32` (all three compile from `chap03/mode13.c` — see [vbe/PORTING.md § VBE_DEMO_L32 / VBE_DEMO_M16](vbe/PORTING.md)) |
+| **joytest** (chap05) | — | `joytest.conf` (single instance) | Configures FCS joystick (`joysticktype=fcs`); mounts `vbe\` as `C:`; `cd chap05`, then `joytest` |
+| **blazerx** (32-bit, VESA) | IPX | `blazerx-host.conf` · `blazerx-join.conf` | ① Wait for Connection  ② Make Connection (Enter at the number prompt) |
 | **blazer** (16-bit) | modem | `blazer-answer.conf` · `blazer-dial.conf` | ① Wait for Connection  ② Make Connection → dial `5551234` |
 | **blazer32** (32-bit) | modem † | `blazer32-answer.conf` · `blazer32-dial.conf` | same as blazer |
 | **term1** | null-modem | `term1-server.conf` · `term1-client.conf` | each window: COM `1`, then type to chat |
 | **term2** | modem | `term2-answer.conf` · `term2-dial.conf` | ① COM `1` → menu `2`  ② COM `1` → menu `1` → dial `5551234` |
 
-† 32-bit modem (`blazer32`) is **untested** — the verified 32-bit multiplayer path is `blzrx32` (IPX). Every other row is confirmed working.
+† 32-bit modem (`blazer32`) is **untested** — the verified 32-bit multiplayer path is `blazerx` (IPX). Every other row is confirmed working.
 
 Notes:
 - The configs use **paths relative to the repository root** (`mount c chap09`, etc.), so there's nothing machine-specific to edit — just launch them with the repo root as your working directory (see above). Works regardless of where the repo is checked out.
@@ -353,13 +365,43 @@ Notes:
 
 The configs above wrap three different DOSBox-X transports; the conceptual picture, if you want to build your own or run across real machines:
 
-- **IPX** (`blzrx`, `blzrx32`) — DOSBox-X's built-in IPX-over-UDP. `ipx=true`, then `IPXNET STARTSERVER` (host) and `IPXNET CONNECT <ip>` (join) bring up a virtual IPX network the game discovers peers on — no packet driver, DHCP, or TCP/IP stack. `127.0.0.1` works for two instances on one machine. The configs run those `IPXNET` commands for you.
+- **IPX** (`blazerx`) — DOSBox-X's built-in IPX-over-UDP. `ipx=true`, then `IPXNET STARTSERVER` (host) and `IPXNET CONNECT <ip>` (join) bring up a virtual IPX network the game discovers peers on — no packet driver, DHCP, or TCP/IP stack. `127.0.0.1` works for two instances on one machine. The configs run those `IPXNET` commands for you.
 
 - **Modem** (`blazer`, `blazer32`, `term2`) — DOSBox-X emulates a Hayes "softmodem": `serial1=modem` gives the guest a COM port that accepts AT commands, and a "phone call" (`ATDT…`) becomes a **TCP connection**. `listenport:` is the side that listens; `phonebookfile` maps the dialed digit-string to the listener's `host:port` (the game's number prompt only takes digits, so the phonebook is the only way to "dial" an address). Relies on the `black9.c` `CONNECT`-speed fix (see [Notable fixes](#notable-fixes-vs-the-book-code)) — DOSBox-X always answers `CONNECT 57600`.
 
 - **Null-modem** (`term1`) — `serial1=nullmodem` is a raw serial cable over TCP, no modem/AT layer: one side `port:`-listens, the other `server:<ip> port:`-connects, and the link is live as soon as both are up (no dialing).
 
 For two real machines instead of one PC, point the joining/dialing side at the host's LAN IP (in `phonebook.txt` for modem, or the `server:` field for null-modem) and make sure the listener's TCP port is reachable.
+
+## SVGA (VESA)
+
+Beyond the book's 320×200 mode 13h, the engine gains SVGA support through the **VESA BIOS Extensions (VBE)**, merged directly into `black3.c`/`black4.c` — but only in builds compiled with `-dVBE_SUPPORT`. In that build, the same `writePixel`/`spriteDraw`/`pcxLoad`/etc. that draw mode 13h also draw any VESA resolution/bpp the card supports, dispatching at runtime on a handful of globals (`DisplayWidth`/`DisplayHeight`/`DisplayPitch`/`DisplayBpp`) that every mode-set call updates. Without `-dVBE_SUPPORT`, none of that exists — the engine compiles to the book's original fixed-320×200×8 form, with no VESA capability, no runtime dispatch, and none of those globals present at all (see [vbe/PORTING.md](vbe/PORTING.md) for the full three-way `DOS_32_BIT`×`VBE_SUPPORT` build matrix). VESA support (`setGraphicsModeVesa`) additionally requires `DOS_32_BIT` — VBE has no 16-bit real-mode equivalent — but a `DOS_32_BIT` build without `VBE_SUPPORT` still gets the same fixed mode-13h-only engine as a 16-bit build, just with flat pointers.
+
+**Why 32-bit only for VESA?** A 640×480×8 frame is ~300 KB. In 16-bit real mode a far pointer wraps at the 64 KB segment boundary, so a flat off-screen surface can't be addressed without huge pointers — which would force rewriting every primitive. 32-bit flat mode makes surfaces trivial, so VESA is built there.
+
+**The performance trade-off is opt-in, not universal.** mode-13h's own pixel/line functions stay fast in a non-`VBE_SUPPORT` build because 320 is a compile-time constant that decomposes into two bit-shifts instead of a multiply — exactly the book's own code, zero dispatch overhead. Only a `VBE_SUPPORT` build pays for the flexibility: pitch becomes a runtime value there (since it might be a VESA mode's negotiated pitch), so every drawing call pays one runtime multiply and one runtime bpp `switch`. In practice this remains imperceptible even where it's paid: DOSBox-X's real bottlenecks are fixed BIOS-tick delays and blit bandwidth, not per-pixel branch/multiply cost — but the majority of demos, which never need VESA, no longer carry any of that cost or code at all.
+
+A program can call `setGraphicsMode(GRAPHICS_MODE13)`, then `setGraphicsModeVesa(width, height, bpp)`, then back to mode 13h, all in one run — the mode-set functions are the only thing that changed; every drawing function already reads whichever mode is currently active. See [vbe/PORTING.md](vbe/PORTING.md) for the full API reference and the demo-porting recipe.
+
+### Demos
+
+The `vbe/` demos are **higher-resolution ports of the book's graphics demos** — each replicates a chapter demo at a VESA resolution instead of mode 13h, using the same engine and function names as the book original. They live in per-chapter subfolders mirroring the book's layout, each a Watcom IDE project (32-bit, `dr2en`). Ported so far: chap03 (mode setup, palette, primitives, light-cycle; also 800×600×16bpp and 1024×768×32bpp variants), chap04 (PCX loading, double buffering, parallax scrolling, palette cycling), chap05 (keyboard, mouse, and joystick input demos), chap07 (sprite animation), chap08 (jellyfish sprite animation, volcanic cinder particle simulation), and **chap09 — the full Starblazer game** (see below). Demos that draw larger text load a bigger `fontNN.bin` via `loadFontSet()` (`exp_font` generates `font16.bin`/`font24.bin`/`font32.bin` alongside the base 8×8 `font.bin`) — chap09's `blazefnt.pcx` is a rarer case, its own bitmap font sheet drawn via `Bitmap`/`bitmapGet`/`bitmapPut` instead.
+
+### Starblazer and the camera pattern
+
+chap09's `blazer.c` is the first VESA port of a full *game* rather than a static or looping demo — it has a scrolling world bigger than one screen (a player-locked window into a 2500×2500-unit universe), so the earlier chapters' "just double every screen-relative coordinate" recipe doesn't hold up: nothing distinguishes a screen-relative constant from a world-relative one just by reading it, and the port shipped for a while with ship speed, AI engagement distances, and effect positions all silently wrong by a factor of 2 because the doubling had been applied inconsistently.
+
+The fix is a small **camera**: the entire simulation — every speed, AI distance, collision size, and world-object dimension — stays in the book's original units, unchanged from 1995. Exactly one transform, `screen = (world - windowOrigin) * CAM_ZOOM`, is applied at the existing world-to-screen mapping sites, with `CAM_ZOOM = 2` giving a 320×240-unit visible window (matching the book's own view size) on the 640×480 screen. Sprite bitmaps are pre-scaled ×2 at asset-creation time as before, so the camera only ever multiplies *positions*; the one place scaling doesn't fall out for free is single-world-pixel effects (missile bolts, nova spark cinders), which need small helper functions to draw/erase/save a `CAM_ZOOM`×`CAM_ZOOM` block instead of one raw pixel.
+
+This is also a specific case of a general truth: rendering more screen pixels always costs more per-pixel work, camera or not — a 640×480 buffer is ~4.8× the pixels of the book's 320×200, and this engine's erase-under-yourself draw model (no full-frame redraw) means every moving object pays that multiplier every frame. The camera doesn't add that cost; it just applies it in one place instead of scattered by hand across ~30 call sites, which is what made the earlier scale bugs possible in the first place. See [vbe/PORTING.md § Coordinate constants & the camera pattern](vbe/PORTING.md) for the implementation details, and chap17/chap18 (both full 3D games with their own scrolling/first-person world) are natural future candidates for the same treatment if they get a VESA port.
+
+**VRAM requirement for high-colour demos.** The default DOSBox-X S3 Trio64 has 4 MB VRAM. `svga_m16` (800×600×16bpp) uses ≈ 1.9 MB for two pages — fine. `svga_l32` (1024×768×32bpp) needs ≈ 6 MB for two pages, which exceeds the default. Use the ready-made config:
+
+```
+dosbox-x -conf dosbox\svga-demos.conf
+```
+
+This sets `machine=svga_s3`, `vmemsize=8`, mounts `vbe\chap03` as `C:`, and prints the available demo names. For everything else — DOSBox-X's default `machine=svga_s3` already provides VBE 2.0 with a linear framebuffer; mount the repo, `cd vbe/chap0N`, build the project, and run the `.exe`.
 
 ## Credits and license
 
