@@ -58,7 +58,7 @@ the source from the companion CD of André LaMothe's *Black Art of 3D Game Progr
 ## 5. In-game music — Rob Wallace / Wallace Music & Sound
 
 - **Files:** `chap*/BLAZEMUS.XMI` (Starblazer soundtrack), `chap18/KRKMUS.XMI` and
-  `ch18_32/KRKMUS.XMI` (Kill or Be Killed soundtrack).
+  `32bit/chap18/KRKMUS.XMI` (Kill or Be Killed soundtrack).
 - Composed by **Rob Wallace** for the book and shipped on its CD; © 1993 Wallace Music &
   Sound, Inc. These share the book's copyright status (§1) and are retained as part of the
   book material.

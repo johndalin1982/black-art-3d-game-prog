@@ -31,7 +31,7 @@ applying to the other). So `vbe/chapXX/foo.c` was retired: its VESA-specific
 behavior was folded into `chapXX/foo.c` itself, behind `#ifdef VBE_SUPPORT` —
 see **The demo-port recipe** below. `VBE_SUPPORT` implies 32-bit build
 (`DOS_32_BIT` is already required for `setGraphicsModeVesa` to exist), the
-same way `ch09_32/blazer32.tgt` has always built `chap09/blazer.c` directly
+same way `32bit/chap09/blazer.tgt` has always built `chap09/blazer.c` directly
 with just `-dDOS_32_BIT` and no separate 32-bit copy — `VBE_SUPPORT` follows
 that exact precedent one step further.
 
@@ -64,11 +64,6 @@ entirely by preprocessor flags — there is no partial/runtime middle ground:
 | ✗ | ✗ | The book's original 16-bit real-mode engine, untouched — fixed 320×200×8, `(y<<8)+(y<<6)+x` addressing, the book's own `_asm` blocks. Byte-for-byte what shipped before any of this work. |
 | ✓ | ✗ | The same fixed-320×200×8 logic, just with flat 32-bit pointers instead of segment:offset (`FAR` expands to nothing) — a pre-VESA 32-bit port, not book code (see [16-bit vs. 32-bit builds](../README.md#16-bit-vs-32-bit-builds)). No VESA capability compiled in at all: `setGraphicsModeVesa`, the `DisplayWidth`/`Height`/`Pitch`/`Bpp` globals, `RGB32`, tinted sprites, and the true-colour PCX path don't exist in this build. |
 | ✓ | ✓ | The full runtime-generic engine described below — any VESA resolution/bpp, switchable while the program runs. This is what every `vbe/chapXX/*.tgt`, `blazer.tgt`, and `blazerx.tgt` build. |
-
-The pre-VESA-work baseline for the `#else` branch in each dual-path function
-is pulled from git history (the last commit before VESA support was added),
-not reconstructed from memory — so the non-`VBE_SUPPORT` path is guaranteed
-identical to what already worked, not an approximation of it.
 
 **`VBE_SUPPORT` implies `DOS_32_BIT`, enforced in code, not just by
 convention.** `black3.h` (the one header every engine/demo file includes,
