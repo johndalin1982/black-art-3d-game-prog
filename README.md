@@ -118,11 +118,20 @@ The engine is split across multiple `black*` modules following the book's chapte
 
 ### 32-bit DOS/4GW demos
 
-The larger demos (and chapters that benefit from flat-mode memory) have parallel 32-bit Watcom projects in `32bit/chapXX/`, keeping the book's own project names — see [32bit/PORTING.md](32bit/PORTING.md) for the directory/porting conventions:
+Most chapters have parallel 32-bit Watcom projects in `32bit/chapXX/`, keeping the book's own project names — see [32bit/PORTING.md](32bit/PORTING.md) for the directory/porting conventions:
 
 | Directory | Project | Source | Notes |
 |---|---|---|---|
-| `32bit/chap09/` | `blazer` | `../../chap09/blazer.c` | Starblazer (32-bit DOS/4GW build) |
+| `32bit/chap03/` | `light`, `mode13`, `modez` | `../../chap03/*.c` | |
+| `32bit/chap04/` | `alien`, `pcxdemo`, `speed`, `spheres`, `worms` | `../../chap04/*.c` | |
+| `32bit/chap05/` | `joytest`, `keytest`, `mousetst`, `ship` | `../../chap05/*.c` | |
+| `32bit/chap06/` | `digidemo`, `mididemo` | `../../chap06/*.c` | |
+| `32bit/chap07/` | `critters`, `floater`, `jumper`, `lockon`, `lostnspc` | `../../chap07/*.c` | |
+| `32bit/chap08/` | `jelly`, `timer`, `vblank`, `volcano` | `../../chap08/*.c` | |
+| `32bit/chap09/` | `blazer`, `term1`, `term2` | `../../chap09/*.c` | Starblazer (32-bit DOS/4GW build) |
+| `32bit/chap11/` | `linedemo`, `wiredemo` | `../../chap11/*.c` | |
+| `32bit/chap12/` | `gourdemo`, `solidemo`, `textdemo`, `tridemo` | `../../chap12/*.c` | |
+| `32bit/chap13/` | `sol2demo` | `../../chap13/sol2demo.c` | |
 | `32bit/chap14/` | `objects` | `../../chap14/objects.c` | |
 | `32bit/chap15/` | `bspdemo`, `sortdemo`, `solzdemo`, `zdemo` | `../../chap15/*.c` | |
 | `32bit/chap16/` | `voxel`, `voxtile`, `voxopt` | `../../chap16/{voxel,voxtile,voxopt}.c` | |

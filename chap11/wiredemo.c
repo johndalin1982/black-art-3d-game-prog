@@ -43,6 +43,12 @@ void main(int argc, char** argv) {
     // set graphics to mode 13h
     setGraphicsMode(GRAPHICS_MODE13);
 
+#ifdef DOS_32_BIT
+    // load the character set for text output (RomCharSet starts NULL
+    // under DOS_32_BIT - 16-bit builds read the BIOS ROM font directly)
+    initRomCharSet();
+#endif
+
     // allocate double buffer
     createDoubleBuffer(200);
 
@@ -131,6 +137,10 @@ void main(int argc, char** argv) {
         // local onto 18 frames per second max
         while ((timerQuery() - StartingTime) < 1);
     }
+
+#ifdef DOS_32_BIT
+    freeRomCharSet();
+#endif
 
     // restore graphics mode back to text
     setGraphicsMode(TEXT_MODE);

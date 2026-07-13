@@ -30,6 +30,12 @@ void main(void) {
     // set graphics mode to 13h
     setGraphicsMode(GRAPHICS_MODE13);
 
+#ifdef DOS_32_BIT
+    // load the character set for text output (RomCharSet starts NULL
+    // under DOS_32_BIT - 16-bit builds read the BIOS ROM font directly)
+    initRomCharSet();
+#endif
+
     // alter the palette and introduce some greys
     makeGreyPalette();
 
@@ -116,6 +122,10 @@ void main(void) {
         sprintf(buffer, "Vertex 3 = %d  ", intensity3);
         printString(0, 20, 12, buffer, 0);
     }
+
+#ifdef DOS_32_BIT
+    freeRomCharSet();
+#endif
 
     // restore text mode
     setGraphicsMode(TEXT_MODE);

@@ -18,12 +18,28 @@ port. Ported so far:
 
 | Directory | Project | Source |
 |---|---|---|
-| `32bit/chap09/` | `blazer` | `../../chap09/blazer.c` |
+| `32bit/chap03/` | `light`, `mode13`, `modez` | `../../chap03/*.c` |
+| `32bit/chap04/` | `alien`, `pcxdemo`, `speed`, `spheres`, `worms` | `../../chap04/*.c` |
+| `32bit/chap05/` | `joytest`, `keytest`, `mousetst`, `ship` | `../../chap05/*.c` |
+| `32bit/chap06/` | `digidemo`, `mididemo` | `../../chap06/*.c` |
+| `32bit/chap07/` | `critters`, `floater`, `jumper`, `lockon`, `lostnspc` | `../../chap07/*.c` |
+| `32bit/chap08/` | `jelly`, `timer`, `vblank`, `volcano` | `../../chap08/*.c` |
+| `32bit/chap09/` | `blazer`, `term1`, `term2` | `../../chap09/*.c` |
+| `32bit/chap11/` | `linedemo`, `wiredemo` | `../../chap11/*.c` |
+| `32bit/chap12/` | `gourdemo`, `solidemo`, `textdemo`, `tridemo` | `../../chap12/*.c` |
+| `32bit/chap13/` | `sol2demo` | `../../chap13/sol2demo.c` |
 | `32bit/chap14/` | `objects` | `../../chap14/objects.c` |
 | `32bit/chap15/` | `bspdemo`, `solzdemo`, `sortdemo`, `zdemo` | `../../chap15/*.c` |
 | `32bit/chap16/` | `voxel`, `voxopt`, `voxtile` | `../../chap16/*.c` |
 | `32bit/chap17/` | `blaze3d` | `../../chap17/blaze3d.c` |
 | `32bit/chap18/` | `krk` | `../../chap18/krk.c` |
+
+Engine module set scales with what each demo actually needs (same set its
+16-bit `.tgt` already lists): `black3` alone for the simplest graphics-only
+demos, up through `black3`/`4`/`5`/`6`/`8`/`9` for the input+sound+timer+modem
+demos (chap09). Any demo pulling in `black6` (sound) also needs `dpmi.c` —
+DIGPAK/MIDPAK are real-mode TSRs reached through the DPMI bridge in a 32-bit
+build (see the repo README's [16-bit vs. 32-bit builds](../README.md#16-bit-vs-32-bit-builds)).
 
 ## Naming & layout
 
