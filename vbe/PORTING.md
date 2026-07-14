@@ -417,6 +417,16 @@ Everything else stays verbatim in both branches — do not rename variables,
 reflow switch blocks, or reword logic beyond what a given `#ifdef` boundary
 requires.
 
+**Never reference `vbe/PORTING.md`, `README.md`, or any other doc file by
+name in a code comment** (`.c`/`.h`), in either branch. A comment has to
+carry its own reasoning inline — state the *why* directly, not "see
+vbe/PORTING.md for the derivation." Doc file paths rot (files get renamed,
+sections get restructured or deleted) in a way the compiler can't catch,
+where a stale in-code explanation at least stays readable even after it
+falls behind. This applies to every source file this guide touches,
+including `engine/black11.c`/`black15.c` and their sibling engine files,
+not just the `chapXX/foo.c` demo files.
+
 ---
 
 ## Coordinate constants & the camera pattern
@@ -1022,10 +1032,13 @@ in `#ifdef VBE_SUPPORT ... #else` with the book's original fixed-320
 addressing). `black11.c` is shared by every chap11-14 build — 16-bit,
 32-bit `DOS_32_BIT`-without-`VBE_SUPPORT`, and 32-bit `VBE_SUPPORT` — so
 referencing them unconditionally is a hard compile error outside
-`VBE_SUPPORT`, not just a latent bug. Two local macros resolve this once
-instead of an `#ifdef`/`#else` at every one of the ten call sites (several
-of which are inside a `for(...)` loop's increment clause, where a bare
-`#ifdef` can't be embedded mid-statement):
+`VBE_SUPPORT`, not just a latent bug. Two macros in `black11.h` (not a
+`.c` file — `black15.c` needs the identical pair too, see the chap15
+section below, so this lives in the shared header rather than being
+copy-pasted per engine file) resolve this once instead of an `#ifdef`/
+`#else` at every one of the ten call sites (several of which are inside a
+`for(...)` loop's increment clause, where a bare `#ifdef` can't be
+embedded mid-statement):
 ```c
 #ifdef VBE_SUPPORT
 #define ROW_OFFSET(y) PITCH_OFFSET(y)
@@ -1280,19 +1293,342 @@ dependency from earlier module-list work, not carried into
 
 ---
 
-## Roadmap
+## chap15: Z-buffered rendering & BSP trees
+
+`engine/black15.c` (`#include "black11.h"`, reusing black11.c's projection
+and clip-rect machinery rather than duplicating it) adds Z-buffered
+rendering and BSP-tree wall traversal on top of chap11-14's already-ported
+pipeline. Four demos sit on it: `chap15/zdemo.c`, `sortdemo.c`,
+`solzdemo.c`, `bspdemo.c`. This section covers how the engine was
+generalized; `zdemo.c` is ported as the proof of concept, the other three
+are not yet.
+
+### What's hardcoded
+
+**Rasterizer addressing** — `drawTbTri3DZ` is the only rasterizer in the
+file, and has the exact same book-fixed `(y<<8)+(y<<6)`/`320` pattern
+chap11-14's rasterizers had before their port:
+```c
+destAddr = DoubleBuffer + (y1 << 8) + (y1 << 6);   // black15.c:171
+ZBuffer  = ZBank1 + (y1 << 8) + (y1 << 6);          // black15.c:175, 179 (ZBank2)
+...
+destAddr += 320; ZBuffer += 320;                    // black15.c:238-239, 313-314
+```
+
+**Stale projection macros** — `drawPolyListZ` still reads the *compile-time*
+`HALF_SCREEN_WIDTH`/`HALF_SCREEN_HEIGHT`/`ASPECT_RATIO` macros directly:
+```c
+x1 = HALF_SCREEN_WIDTH + x1 * ViewingDistance / z1;   // black15.c:464-471
+y1 = HALF_SCREEN_HEIGHT - ASPECT_RATIO * y1 * ViewingDistance / z1;   // black15.c:487-488
+```
+This is different from the other two items — it's not undesigned, it's
+*behind*: `black11.c`'s own functions already switched these four macro
+references to the runtime globals `HalfScreenWidth`/`HalfScreenHeight`/
+`AspectRatio`/`InverseAspectRatio` (kept correct by `resyncCachedSettings()`,
+see the chap11 section above). `black15.c` was never updated to match.
+
+**Z-buffer sizing — a genuinely new problem, not a repeat of chap11-14's**
+— `createZBuffer` sizes its two banks from a hardcoded row width:
+```c
+#ifdef DOS_32_BIT
+ZBankSize = ZHeight2 * (unsigned int)1280;  // 320 * 4 bytes (32-bit int)
+#else
+ZBankSize = ZHeight2 * (unsigned int)640;   // 320 * 2 bytes (16-bit int)
+#endif
+```
+`1280`/`640` bake in *both* the fixed 320-pixel row width *and*
+`sizeof(int)`. This can't be expressed with `PITCH_OFFSET`/`DisplayPitch` —
+those track the *color* framebuffer's byte-pitch, which varies with
+`DisplayBpp` (8/16/32 bits per pixel); the Z-buffer is always one `int` per
+pixel column, completely independent of `DisplayBpp`. A VBE port needs its
+own runtime Z-buffer row-stride, derived from `DisplayWidth * sizeof(int)`,
+not reused from the color-buffer machinery. The same `(y<<8)+(y<<6)`/`320`
+Z-buffer addressing above needs this new stride, not `ROW_OFFSET`/
+`ROW_PITCH` — those two are pixel-width-based, not byte-pitch-based.
+
+(The Z-buffer's `unsigned int` size computation could in principle overflow
+at high resolutions in a 16-bit build, but `VBE_SUPPORT` always implies
+`DOS_32_BIT`, where `unsigned int` is 32-bit flat — not a real risk for
+this port.)
+
+**No texture-stride-class bug** — chap15 has no texture sampling (flat
+shading only), so the class of bug found in chap11-13's `drawTriangle2DText`
+doesn't recur here.
+
+**BSP tree code itself needs no changes** — `bspWorldToCamera`/
+`bspTranslate`/`bspShade`/`bspTraverse`/`bspDelete`/`bspPrint`/`bspView`/
+`buildBspTree`/`intersectLines` operate on `Wall`/`Point3D`/`Vector3D`
+floats and reuse `ClipNearZ`/`ClipFarZ`/`PolyClipMinX` etc. from black11.c
+(already resolution-aware) and `drawPolyList` (not `drawPolyListZ` — the
+BSP demo doesn't Z-buffer, it sorts).
+
+### The fix
+
+1. **`drawTbTri3DZ`'s color-buffer addressing**: same `ROW_OFFSET(y)`/
+   `ROW_PITCH` macros already defined in `black11.h` (shared, not
+   duplicated, since both `black11.c` and `black15.c` need the identical
+   definition) — no new macro needed, just apply the existing ones to the
+   five sites above.
+2. **`drawPolyListZ`'s projection math**: swap the four macro references
+   for the four runtime globals, exactly matching what black11.c's own
+   functions already do. No new mechanism.
+3. **New Z-buffer stride macros**, parallel to `ROW_OFFSET`/`ROW_PITCH` but
+   pixel-width based instead of byte-pitch based:
+```c
+#ifdef VBE_SUPPORT
+#define ZROW_OFFSET(y) ((unsigned long)(y) * DisplayWidth)
+#define ZROW_PITCH     DisplayWidth
+#else
+#define ZROW_OFFSET(y) (((y) << 6) + ((y) << 8))
+#define ZROW_PITCH     320
+#endif
+```
+   and `createZBuffer`'s size computation becomes
+   `ZHeight2 * (unsigned long)DisplayWidth * sizeof(int)` under
+   `VBE_SUPPORT`, keeping the existing `1280`/`640` literals for the
+   `#else` book-original path.
+
+### Scope
+
+`bspdemo.c` additionally has its own demo-level hardcoded constants
+unrelated to `black15.c` itself — `WORLD_SCALE_X/Y/Z`/`SCREEN_TO_WORLD_X/Z`
+(in `black15.h`, shared with the rest of chap15) and GUI bounding boxes
+(`BSP_MIN_X/MAX_X`, `BSP_MAX_Y`, `INTERFACE_MIN_X/MAX_X`,
+`GADGET_WIDTH/HEIGHT`, all in `bspdemo.c` itself), mapping its mouse-driven
+2D line-editor screen pixels into 3D wall world coordinates. These need the
+same demo-level `#ifdef VBE_SUPPORT`/screen-only-UI-doubling treatment as
+any other chapter's fixed coordinates — separate work from the engine fix
+above.
+
+### Demo order
+
+| Demo | Uses | Scope |
+|---|---|---|
+| `zdemo.c` (64 lines) | Z-buffer directly (`createZBuffer`/`fillZBuffer`/`drawTri3DZ`), two hardcoded triangles, no loop | Simplest — no keyboard, no assets, no PLG loading |
+| `sortdemo.c` (276 lines) | Painter's-algorithm sort (`sortPolyList`/`drawPolyList`, already in black11.c), no Z-buffer | Interactive, PLG objects |
+| `solzdemo.c` (301 lines) | Z-buffer via `drawPolyListZ` | Same interactive loop as `sortdemo.c` |
+| `bspdemo.c` (691 lines) | BSP tree + mouse GUI editor, 3 PCX assets (`bspbutt.pcx`/`bsppoint.pcx`/`bspint.pcx`), its own world-scale/GUI constants | Most complex — a separate coordinate-mapping job on top of the engine fix |
+
+`zdemo.c` is the recommended proof of concept: it exercises both new pieces
+of engine work (Z-buffer stride fix, projection-macro catch-up) with none
+of the demo-level coordinate-scaling noise the other three carry.
+
+### Status
+
+`chap15/zdemo.c` is ported. It calls `drawTri3DZ` directly with fixed
+screen-space pixel coordinates for its two triangles (no projection
+involved, `z` is only a depth-comparison value between the two triangles,
+so it doesn't scale) — screen-only UI, doubled the same way as
+`gourdemo.c`'s HUD. `createZBuffer(200)` becomes `createZBuffer(480)` to
+match `createDoubleBuffer`'s existing VBE_SUPPORT convention.
+
+Porting it surfaced one thing the design pass above missed:
+`resyncCachedSettings()` was `static` (private to `black11.c`), but
+`drawPolyListZ` needs it for the same reason `black11.c`'s own
+`drawPolyList` does (both read `HalfScreenWidth`/`AspectRatio`), and
+**`drawTri3DZ` needs it too** — it reads `PolyClipMinX/MinY/MaxX/MaxY`
+directly for its trivial-rejection test, exactly like `black11.c`'s
+`drawTriangle2D` does, and `zdemo.c` calls `drawTri3DZ` directly, bypassing
+`drawPolyListZ` entirely. Missing this would have left `zdemo.c`'s
+triangles silently clipped against the mode-13h clip rect (0/0/319/199)
+even at 640×480, since nothing else in its call path would have triggered
+the resync. Fixed by removing `static` from `resyncCachedSettings()` and
+declaring it in `black11.h` (`#ifdef VBE_SUPPORT`-guarded, same as its
+definition) — a legitimate engine-to-engine contract between cooperating
+files, not a demo-facing API: no demo calls it directly, only `black11.c`'s
+own functions and now `black15.c`'s `drawTri3DZ`/`drawPolyListZ`.
+
+`chap15/sortdemo.c` is ported too, and needed no new engine work at all —
+it's a multi-object (4 `Object`s) painter's-algorithm demo using
+`generatePolyList`/`clipObject3D`/`removeObject`/`sortPolyList`/
+`drawPolyList`, all already VBE-aware from the chap11-14 work; it never
+touches `black15.c`'s Z-buffer path. The book leaves `ViewingDistance` at
+its 200 default rather than setting it explicitly, so the port adds an
+explicit `#ifdef VBE_SUPPORT` scaled assignment where the book has none —
+without it, `ViewingDistance` would silently stay at the unscaled default
+under `VBE_SUPPORT` too, since nothing else in the file ever sets it. Its
+per-object "culled" index labels (`index * 26`) are screen-only UI, doubled
+the same way as `gourdemo.c`'s HUD.
+
+`chap15/solzdemo.c` is ported too — the same interactive multi-object demo
+as `sortdemo.c`, but through the Z-buffer path (`drawPolyListZ`) instead of
+`sortPolyList`/`drawPolyList`. `createZBuffer(200)` becomes
+`createZBuffer(480)`, matching `createDoubleBuffer`'s existing convention;
+same explicit `#ifdef VBE_SUPPORT` `ViewingDistance` scaling as `sortdemo.c`
+(the book leaves it at its 200 default in both files); same screen-only-UI
+doubling for its "culled" index labels.
+
+`chap15/bspdemo.c` is ported too, completing chap15 — see below for its
+design and implementation notes.
+
+---
+
+## chap15/bspdemo.c: the BSP level editor
+
+`bspdemo.c` is a mouse-driven 2D level editor (draw wall lines, build a BSP
+tree from them, fly through the result) rather than a passive demo, and
+raises a design question the other three chap15 demos didn't: what should
+happen to the *world* the editor produces when the editor's own screen
+gets bigger?
+
+### Screen-only UI: the editor GUI itself
+
+Straightforward doubling, same recipe as every other chapter's fixed
+coordinates — `BSP_MIN_X/MAX_X/MIN_Y/MAX_Y` (editor canvas, 0/222/0/199),
+`INTERFACE_MIN_X/MAX_X/MIN_Y/MAX_Y` (control panel, 226/319/0/199),
+`GADGET_WIDTH/HEIGHT` (64/12), the six `BspControls[]` gadget positions
+(240,94 through 240,179), and the mouse-position readout at
+`printStringDb(228, 56, ...)`. All `#ifdef VBE_SUPPORT`/`#else` pairs,
+doubled ×(640/320) for X and ×(480/200) for Y, no different from
+`gourdemo.c`'s HUD.
+
+One thing generalizes for free: `convertLinesToWalls`'s wall-number label
+(`printString` at the midpoint of `Lines[index]`) is computed from
+`Lines[].sx/sy/ex/ey`, which already hold whatever coordinate space the
+mouse mapping produces — no separate `#ifdef` needed there, only the
+*hardcoded* literals above need one.
+
+`deleteLine`'s nearest-line search (`testError = 100*abs((length1+length2)
+- lengthLine)/lengthLine`) is a dimensionless percentage — scale-invariant
+by construction, so it needs no changes at all regardless of resolution.
+
+### Sprite sheets and background
+
+`bspbutt.pcx` (14 control-button frames, 2 rows × 7 cols, 64×12 cells) and
+`bsppoint.pcx` (4 pointer frames, 1 row × 4 cols, 9×9 cells) are **sprite
+sheets** — the per-cell rescale recipe from Assets above (not a whole-image
+resize, which would corrupt the 1px grid lines `pcxGetSprite` relies on),
+doubling to 128×24 and 18×18 cells respectively. `bspint.pcx` (the
+full-screen interface background) is a **background** — whole-image
+rescale to 640×480, same as any other chapter's full-screen PCX.
+`spriteInit`'s width/height arguments for `ControlsSpr`/`PointerSpr` move
+from 64×12/9×9 to 128×24/18×18 to match.
+
+### Mouse coordinate mapping: precedent already exists
+
+```c
+mouseX = PointerSpr.x = (mouseX >> 1) - 16;
+mouseY = PointerSpr.y = mouseY;
+```
+`chap05/mousetst.c` (already ported) establishes the pattern for this
+exact situation:
+```c
+#ifdef VBE_SUPPORT
+HammerSprite.x = mouseX - 22;
+HammerSprite.y = mouseY - 20;
+#else
+HammerSprite.x = (mouseX >> 1) - 16;
+HammerSprite.y = mouseY;
+#endif
+```
+The DOS mouse driver (INT 33h) reports X in a virtual range that's fixed
+regardless of video mode (hence the book's `>>1` to halve it down to
+mode-13h's 320-wide range) - under `VBE_SUPPORT` at 640-wide, that virtual
+range already matches the screen directly, so the divide is dropped
+entirely, not replaced with a different divisor. The replacement offset
+isn't a clean multiple of the book's (mousetst.c's own hammer offset went
+from `-16` to `-22`, not `-32`) - it has to be re-tuned by hand against the
+actual rescaled sprite's hotspot, the same way mousetst.c's was. `bspdemo.c`
+needs the same treatment for `PointerSpr`'s offset, and - since Y gets no
+adjustment at all in the book (not even a divide, an existing asymmetry in
+the mouse driver's own X-vs-Y convention) - whether Y needs adjustment
+under a 480-tall `VBE_SUPPORT` mode isn't obvious from reading the code
+alone and should be verified once buildable, not assumed unchanged.
+
+### The world-scale question
+
+The 2D lines drawn in the editor become 3D wall coordinates via:
+```c
+wallWorld[i].x = WORLD_SCALE_X * (SCREEN_TO_WORLD_X + Lines[index].sx);
+wallWorld[i].z = WORLD_SCALE_Z * (SCREEN_TO_WORLD_Z + Lines[index].sy);
+```
+(`WORLD_SCALE_Y` is defined in `black15.h` but never actually referenced
+anywhere - dead, book-original, ignore it.) If the editor canvas simply
+gets bigger under `VBE_SUPPORT` and `WORLD_SCALE_X/Z`/`SCREEN_TO_WORLD_X/Z`
+are left at their book values, the resulting BSP world is proportionally
+**bigger** too - a level drawn edge-to-edge in the bigger editor spans more
+world-units than the same-shaped level would in the book. That's the same
+class of bug the camera pattern (`chap09/blazer.c`) exists to prevent:
+`bspView`'s viewpoint movement deltas (`ViewPoint.y += 20`, etc.) are
+book-tuned world-unit constants, and if the world silently grows around
+them, movement feels proportionally slower/smaller relative to the level -
+exactly the "everything feels different, nothing looks broken" failure
+mode the camera pattern's whole existence is about.
+
+The fix, matching the camera pattern's own principle (world stays in book
+units; only the screen-facing conversion scales): grow `SCREEN_TO_WORLD_X/Z`
+by the same ×2/×2.4 factor the editor canvas grew by (so the offset still
+centers correctly against the bigger pixel range), and *shrink*
+`WORLD_SCALE_X/Z` by the same factor (so each of the now-more-numerous
+editor pixels represents a proportionally smaller world distance) - net
+effect: the same-shaped level produces the exact same world geometry,
+just with finer editor precision to draw it:
+```c
+#ifdef VBE_SUPPORT
+#define SCREEN_TO_WORLD_X   -224   // -112 * (640/320)
+#define SCREEN_TO_WORLD_Z   -240   // -100 * (480/200)
+#define WORLD_SCALE_X       1.0f   // 2 / (640/320)
+#define WORLD_SCALE_Z       (-2.0f / 2.4f)   // -0.8(3), not a clean number
+#else
+#define SCREEN_TO_WORLD_X   -112
+#define SCREEN_TO_WORLD_Z   -100
+#define WORLD_SCALE_X       2
+#define WORLD_SCALE_Z      -2
+#endif
+```
+`WORLD_SCALE_Z` landing on a non-integer (`-0.8(3)`) is a direct, unavoidable
+consequence of mode-13h's non-square pixels (the same ×2-vs-×2.4 split
+documented in "Coordinate constants & the camera pattern" above) - not a
+mistake, just worth writing as `-2.0f / 2.4f` in code rather than a bare
+magic float, so the derivation stays visible. `WALL_CEILING`/`WALL_FLOOR`
+(20/-20, wall height) and `WORLD_POS_X/Y/Z` (0/0/300, post-build
+translation) are pure world-space constants with no screen-coordinate
+involvement at all - they stay exactly as the book wrote them, in both
+branches.
+
+### Font
+
+No `loadFontSet` currently (the book calls bare `initRomCharSet()`) - add
+the same `loadFontSet("font16.bin", 16)`/`freeFontSet()` pair every other
+`VBE_SUPPORT` demo that prints text already has.
+
+### Status
+
+Ported, matching the design above. One consistency fix surfaced during
+implementation, not covered by the design pass: the book records each new
+wall line's endpoints at the mouse position plus a fixed `+4` offset
+(half of the book's 9×9 pointer sprite, centering the recorded point on the
+crosshair rather than the sprite's top-left corner) - since `PointerSpr`'s
+own centering offset became `-9` under `VBE_SUPPORT` (half of the doubled
+18×18 sprite, following the `mousetst.c` precedent), the matching endpoint
+offset needed to become `+9` too, or recorded lines would land 5px off from
+where the crosshair was actually drawn. Pulled into a `crosshairOffset`
+local (9 under `VBE_SUPPORT`, 4 under book) and applied at all six call
+sites that previously hardcoded `+4` (line-endpoint recording,
+`deleteLine`'s search point, and the coordinate readout).
+
+`bspbutt.pcx` (14 button frames, cells 64×12 doubled to 128×24) and
+`bsppoint.pcx` (4 pointer frames, cells 9×9 doubled to 18×18) were rescaled
+with the per-cell nearest-neighbor recipe from Assets above, each into a
+tight canvas sized to just the doubled grid (259×176 and 77×20
+respectively) - same convention as `vbe/chap05/hammer.pcx` and
+`vbe/chap12/textures.pcx`. `bspint.pcx` was whole-image resized to 640×480.
 
 - **Phase 1 — 2D** ✓: chap03, chap04, chap05, chap07, chap08, chap09 (Starblazer —
   the first full-game port; introduced the camera pattern above and
   `waitForVerticalRetrace`).
-- **Phase 2 — 3D** ✓ (chap11-14): chap11–18 (`black11`/`black15`/`black17`/
-  `black18`) remain otherwise unported. chap11-13 (`black11`) are fully
-  ported — see "chap11: 3-D projection & the resolution-aware rasterizer"
-  above for the design, and its Status section for the demo-by-demo
-  breakdown. chap14/objects.c is ported too (reuses `black11.c` directly,
-  no separate engine snapshot). chap15/17/18 (`black15`/`black17`/`black18`)
-  are still undesigned. Apply the camera pattern to chap17 (Starblazer 3-D)
-  and chap18 (Kill or Be Killed) when that work starts, same as chap09.
+- **Phase 2 — 3D** ✓ (chap11-15 complete): chap11–18 (`black11`/`black15`/
+  `black17`/`black18`) remain otherwise unported. chap11-13 (`black11`) are
+  fully ported — see "chap11: 3-D projection & the resolution-aware
+  rasterizer" above for the design, and its Status section for the
+  demo-by-demo breakdown. chap14/objects.c is ported too (reuses
+  `black11.c` directly, no separate engine snapshot). chap15 (`black15`) is
+  fully ported too — see "chap15: Z-buffered rendering & BSP trees" and
+  "chap15/bspdemo.c: the BSP level editor" above — all four demos
+  (`zdemo.c`/`sortdemo.c`/`solzdemo.c`/`bspdemo.c`) are done. chap17/18
+  (`black17`/`black18`) are still undesigned. Apply the camera pattern to
+  chap17 (Starblazer 3-D) and chap18 (Kill or Be Killed) when that work
+  starts, same as chap09.
 
 ### chap08 notes
 

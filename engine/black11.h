@@ -18,6 +18,20 @@
 #define HALF_SCREEN_WIDTH       160 // center of screen - mode-13h default
 #define HALF_SCREEN_HEIGHT      100
 
+// resolves to the current row's byte offset/pitch, whichever way this build
+// computes it. PITCH_OFFSET/DisplayPitch (black3.h) only exist under
+// VBE_SUPPORT - the #else mirrors the book's own fixed mode-13h addressing
+// (320 = (1<<8)+(1<<6)), same as every non-VBE_SUPPORT function in
+// black3.c. Shared by every black11.c-family engine file (black11.c,
+// black15.c) that rasterizes into the color buffer.
+#ifdef VBE_SUPPORT
+#define ROW_OFFSET(y) PITCH_OFFSET(y)
+#define ROW_PITCH     DisplayPitch
+#else
+#define ROW_OFFSET(y) (((y) << 6) + ((y) << 8))
+#define ROW_PITCH     320
+#endif
+
 #define POLY_CLIP_MIN_X         0   // minimum x,y clip values
 #define POLY_CLIP_MIN_Y         0
 
@@ -141,14 +155,24 @@ extern int PolyClipMinX,
            PolyClipMaxY;
 
 // projection constants used in place of HALF_SCREEN_WIDTH/HEIGHT and
-// ASPECT_RATIO/INVERSE_ASPECT_RATIO everywhere in black11.c - default to
-// the mode-13h macros above, kept in sync with the active display
-// internally (see resyncCachedSettings() in black11.c) - nothing outside
-// this file needs to (or can) refresh them directly
+// ASPECT_RATIO/INVERSE_ASPECT_RATIO everywhere in black11.c/black15.c -
+// default to the mode-13h macros above, kept in sync with the active
+// display by resyncCachedSettings() below - no DEMO needs to (or can)
+// refresh them directly
 extern int HalfScreenWidth;      // HALF_SCREEN_WIDTH, resolution-aware
 extern int HalfScreenHeight;     // HALF_SCREEN_HEIGHT, resolution-aware
 extern float AspectRatio;        // ASPECT_RATIO, resolution-aware
 extern float InverseAspectRatio; // INVERSE_ASPECT_RATIO, resolution-aware
+
+#ifdef VBE_SUPPORT
+// keeps HalfScreenWidth/HalfScreenHeight/AspectRatio/InverseAspectRatio/
+// PolyClip* in sync with the active display - called internally by every
+// black11.c function that reads them, and by black15.c's drawPolyListZ
+// (its sibling rasterizer to black11.c's drawPolyList). Not meant for
+// demos to call - only exists under VBE_SUPPORT, same reasoning as
+// setGraphicsModeVesa.
+void resyncCachedSettings(void);
+#endif
 
 extern Sprite Textures; // this holds the textures
 

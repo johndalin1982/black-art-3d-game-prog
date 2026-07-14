@@ -1,14 +1,40 @@
-// these constants are used to place the walls in world coordinates
+// these constants are used to place the walls in world coordinates.
+// WORLD_SCALE_X/Z and SCREEN_TO_WORLD_X/Z convert bspdemo.c's editor pixel
+// coordinates into world units - both black15.c's own buildBspTree
+// (highlight overlay, converts world back to screen) and bspdemo.c
+// (screen to world) use these, so they're defined once here rather than
+// separately in each file. Under VBE_SUPPORT the editor canvas doubles
+// ((640/320) for X, (480/200) for Y - see bspdemo.c's BSP_MAX_X/Y), so
+// SCREEN_TO_WORLD_X/Z grow by the same factor (the offset still centers
+// against the bigger pixel range) and WORLD_SCALE_X/Z shrink by the same
+// factor (each of the now-more-numerous editor pixels represents a
+// proportionally smaller world distance) - net effect: the same-shaped
+// level produces the exact same world geometry regardless of editor
+// resolution, matching the same "world stays in book units, only the
+// screen-facing conversion scales" camera pattern used elsewhere in the
+// engine. WORLD_SCALE_Z landing on a non-integer is a direct consequence
+// of mode-13h's non-square pixels, not a mistake.
+#ifdef VBE_SUPPORT
+#define WORLD_SCALE_X   1.0f            // 2 / (640/320)
+#define WORLD_SCALE_Y   2               // unused anywhere - book leftover
+#define WORLD_SCALE_Z   (-2.0f / 2.4f)  // -2 / (480/200)
+#else
 #define WORLD_SCALE_X   2   // scaling factors used to scale the
 #define WORLD_SCALE_Y   2   // screen coordinates that the BSP
 #define WORLD_SCALE_Z  -2   // is drawn with
+#endif
 
 #define WORLD_POS_X     0   // the final position to move the
 #define WORLD_POS_Y     0   // walls to when "view" is selected
 #define WORLD_POS_Z     300
 
+#ifdef VBE_SUPPORT
+#define SCREEN_TO_WORLD_X   -224    // -112 * (640/320)
+#define SCREEN_TO_WORLD_Z   -240    // -100 * (480/200)
+#else
 #define SCREEN_TO_WORLD_X   -112    // the translation factors to move the origin
 #define SCREEN_TO_WORLD_Z   -100    // to the center of the screen in mode 320x200
+#endif
 
 #define WALL_CEILING        20  // the y coordinate of the artificial ceiling
 #define WALL_FLOOR         -20  // the y coordinate of the artificial floor

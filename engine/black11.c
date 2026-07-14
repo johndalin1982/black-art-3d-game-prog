@@ -19,18 +19,6 @@
 #include <black9.h>
 #include <black11.h>
 
-// resolves to the current row's byte offset/pitch, whichever way this build
-// computes it. PITCH_OFFSET/DisplayPitch (black3.h) only exist under
-// VBE_SUPPORT - the #else mirrors the book's own fixed mode-13h addressing
-// (320 = (1<<8)+(1<<6)), same as every non-VBE_SUPPORT function in black3.c.
-#ifdef VBE_SUPPORT
-#define ROW_OFFSET(y) PITCH_OFFSET(y)
-#define ROW_PITCH     DisplayPitch
-#else
-#define ROW_OFFSET(y) (((y) << 6) + ((y) << 8))
-#define ROW_PITCH     320
-#endif
-
 float ClipNearZ = 100,                                      // the near or hither clipping plane
       ClipFarZ = 3000,                                      // the far or yon clipping plane
       ScreenWidth = 320,                                    // dimensions of the screen
@@ -79,19 +67,20 @@ Sprite Textures; // this holds the textures
 static int CachedDisplayWidth  = MODE13_WIDTH;
 static int CachedDisplayHeight = MODE13_HEIGHT;
 
-// called internally by every black11.c function that reads
+// called internally by every black11.c/black15.c function that reads
 // HalfScreenWidth/HalfScreenHeight/AspectRatio/InverseAspectRatio/
 // PolyClip* - keeps them correct for the active display without requiring
-// any caller outside this file to know they exist. Only exists under
-// VBE_SUPPORT: without it there's no setGraphicsModeVesa to ever change
-// the display away from mode-13h's fixed 320x200, so the mode-13h defaults
-// above are always correct and every call site below compiles out to
-// nothing - not even an empty call, since the #ifdef there drops the call
-// entirely, matching the book's original zero-overhead addressing.
+// any DEMO to know they exist (only fellow engine files call this - see
+// black15.c's drawPolyListZ). Only exists under VBE_SUPPORT: without it
+// there's no setGraphicsModeVesa to ever change the display away from
+// mode-13h's fixed 320x200, so the mode-13h defaults above are always
+// correct and every call site below compiles out to nothing - not even an
+// empty call, since the #ifdef there drops the call entirely, matching the
+// book's original zero-overhead addressing.
 // AspectRatio exists to correct mode-13h's non-square pixels (320x200
 // stretched across a 4:3 CRT); VESA modes at true 4:3 pixel counts
 // (640x480, 1024x768) have square pixels, so it evaluates to 1.0 there.
-static void resyncCachedSettings(void) {
+void resyncCachedSettings(void) {
     if (DisplayWidth == CachedDisplayWidth && DisplayHeight == CachedDisplayHeight) {
         return; // nothing has changed since the last check - skip the float divide
     }

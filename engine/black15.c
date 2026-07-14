@@ -20,6 +20,21 @@
 #include "black11.h"
 #include "black15.h"
 
+// ROW_OFFSET(y)/ROW_PITCH (the color-buffer addressing macros) come from
+// black11.h - shared with black11.c, the file that first needed them.
+
+// resolves to the current row's INT-element offset/pitch for the Z-buffer.
+// The Z-buffer is always one int per pixel column, regardless of
+// DisplayBpp, so it can't reuse ROW_OFFSET/ROW_PITCH above (those are
+// byte-pitch-based, tied to the color buffer's bits-per-pixel).
+#ifdef VBE_SUPPORT
+#define ZROW_OFFSET(y) ((unsigned long)(y) * DisplayWidth)
+#define ZROW_PITCH     DisplayWidth
+#else
+#define ZROW_OFFSET(y) (((y) << 6) + ((y) << 8))
+#define ZROW_PITCH     320
+#endif
+
 int FAR* ZBuffer;    // the current z buffer memory
 int FAR* ZBank1;     // memory bank 1 of z buffer
 int FAR* ZBank2;     // memory bank 2 of z buffer
@@ -168,15 +183,15 @@ void drawTbTri3DZ(
     }
 
     // compute starting address in video memory
-    destAddr = DoubleBuffer + (y1 << 8) + (y1 << 6);
+    destAddr = DoubleBuffer + ROW_OFFSET(y1);
 
     // start z buffer at proper bank
     if (y1 < ZHeight2) {
-        ZBuffer = ZBank1 + (y1 << 8) + (y1 << 6);
+        ZBuffer = ZBank1 + ZROW_OFFSET(y1);
     } else {
         tempY = y1 - ZHeight2;
 
-        ZBuffer = ZBank2 + (tempY << 8) + (tempY << 6);
+        ZBuffer = ZBank2 + ZROW_OFFSET(tempY);
     }
 
     // test if x clipping is needed
@@ -235,8 +250,8 @@ void drawTbTri3DZ(
             zRight += b2Y;
 
             // adjust video and z buffer offsets
-            destAddr += 320;
-            ZBuffer += 320;
+            destAddr += ROW_PITCH;
+            ZBuffer += ZROW_PITCH;
         }
     } else {
         // clip x axis with slower version
@@ -310,8 +325,8 @@ void drawTbTri3DZ(
             // END FIXED POINT DEMO SECTION ///////////////////////////////////////////////
 
             // adjust video and z buffer offsets
-            destAddr += 320;
-            ZBuffer += 320;
+            destAddr += ROW_PITCH;
+            ZBuffer += ZROW_PITCH;
         }
     }
 }
@@ -333,6 +348,10 @@ void drawTri3DZ(
         tempZ,
         newX,   // used to compute new x and z at triangle splitting point
         newZ;
+
+#ifdef VBE_SUPPORT
+    resyncCachedSettings();
+#endif
 
     // test for h lines and v lines
     if (x1 == x2 && x2 == x3 || y1 == y2 && y2 == y3) {
@@ -424,6 +443,10 @@ void drawPolyListZ(void) {
           x3, y3, z3,
           x4, y4, z4;
 
+#ifdef VBE_SUPPORT
+    resyncCachedSettings();
+#endif
+
     // draw each polygon in list
     for (currPoly = 0; currPoly < NumPolysFrame; currPoly++) {
         // do Z clipping first before projection
@@ -461,14 +484,14 @@ void drawPolyListZ(void) {
         y3 = WorldPolys[currPoly]->vertexList[2].y;
 
         // compute screen position of points
-        x1 = HALF_SCREEN_WIDTH + x1 * ViewingDistance / z1;
-        y1 = HALF_SCREEN_HEIGHT - ASPECT_RATIO * y1 * ViewingDistance / z1;
+        x1 = HalfScreenWidth + x1 * ViewingDistance / z1;
+        y1 = HalfScreenHeight - AspectRatio * y1 * ViewingDistance / z1;
 
-        x2 = HALF_SCREEN_WIDTH + x2 * ViewingDistance / z2;
-        y2 = HALF_SCREEN_HEIGHT - ASPECT_RATIO * y2 * ViewingDistance / z2;
+        x2 = HalfScreenWidth + x2 * ViewingDistance / z2;
+        y2 = HalfScreenHeight - AspectRatio * y2 * ViewingDistance / z2;
 
-        x3 = HALF_SCREEN_WIDTH + x3 * ViewingDistance / z3;
-        y3 = HALF_SCREEN_HEIGHT - ASPECT_RATIO * y3 * ViewingDistance / z3;
+        x3 = HalfScreenWidth + x3 * ViewingDistance / z3;
+        y3 = HalfScreenHeight - AspectRatio * y3 * ViewingDistance / z3;
 
         // draw triangle
         drawTri3DZ(
@@ -484,8 +507,8 @@ void drawPolyListZ(void) {
             y4 = WorldPolys[currPoly]->vertexList[3].y;
 
             // project to screen
-            x4 = HALF_SCREEN_WIDTH + x4 * ViewingDistance / z4;
-            y4 = HALF_SCREEN_HEIGHT - ASPECT_RATIO * y4 * ViewingDistance / z4;
+            x4 = HalfScreenWidth + x4 * ViewingDistance / z4;
+            y4 = HalfScreenHeight - AspectRatio * y4 * ViewingDistance / z4;
 
             // draw triangle
             drawTri3DZ(
@@ -503,7 +526,11 @@ int createZBuffer(unsigned int height) {
     // set global z buffer values
     ZHeight = height;
     ZHeight2 = height / 2;
-#ifdef DOS_32_BIT
+#ifdef VBE_SUPPORT
+    // one int per pixel column, at the active display's width - not the
+    // book's fixed 320
+    ZBankSize = (unsigned int)(ZHeight2 * (unsigned long)DisplayWidth * sizeof(int));
+#elif defined(DOS_32_BIT)
     ZBankSize = ZHeight2 * (unsigned int)1280;  // 32-bit ints: 320 * 4 bytes
 #else
     ZBankSize = ZHeight2 * (unsigned int)640;   // 16-bit ints: 320 * 2 bytes
