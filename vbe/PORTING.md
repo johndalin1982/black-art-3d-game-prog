@@ -960,15 +960,339 @@ Clip the sprite rectangle to surface bounds once before the row loop, then use `
 
 ---
 
+## chap11: 3-D projection & the resolution-aware rasterizer
+
+`engine/black11.c` (the wireframe/flat/gouraud/textured 3-D pipeline shared by
+chap11-13, also reused as-is by chap14) predated the runtime `DisplayWidth`/
+`DisplayHeight`/`PITCH_OFFSET` generalization above — every rasterizer and
+the perspective-projection math itself was hardcoded to 320×200. This
+section covers how that was generalized.
+
+### What's hardcoded
+
+**Rasterizer addressing** — `drawLine`, `drawTopTriangle`,
+`drawBottomTriangle`, `drawTriangle2DGouraud`, and `drawTriangle2DText` all
+compute the first row's address as `(y<<8)+(y<<6)` (`y*320`) and step
+`+= 320` per row:
+```c
+vbStart = vbStart + ((y0 << 6) + (y0 << 8) + x0);   // drawLine
+...
+yInc = 320;                                          // drawLine, dy>=0 case
+...
+destAddr = DoubleBuffer + (y1 << 8) + (y1 << 6);      // the four triangle fills
+for (...; ...; destAddr += 320) { ... }
+```
+All writes are `unsigned char` (`destAddr[x] = color`) — the whole file
+assumes 8bpp, one byte per pixel, x used directly as a byte offset.
+
+**Perspective projection** — every draw function (`drawObjectWire`, and the
+flat/gouraud/textured fill paths reached through `drawObjectSolid`/
+`drawPolyList`) independently inlines the same formula at its own call site
+(no shared "project point" function — consistent with the book's style
+elsewhere in this file):
+```c
+x1 = HALF_SCREEN_WIDTH  + x1 * ViewingDistance / z1;
+y1 = HALF_SCREEN_HEIGHT - ASPECT_RATIO * y1 * ViewingDistance / z1;
+```
+`HALF_SCREEN_WIDTH`/`HALF_SCREEN_HEIGHT` are `#define`d 160/100.
+`ViewingDistance` is a runtime `int` (book default 200, some demos set 250)
+— the focal length of the pinhole camera, in the *same units as
+HALF_SCREEN_WIDTH*, i.e. pixels. Two visibility/culling tests
+(`clipObject3D`'s `x1Compare`/`y1Compare`, `removeObject`'s bounding-sphere
+`xCompare`/`yCompare`) use the same constants.
+
+**Clip rect** — `PolyClipMinX/MinY/MaxX/MaxY` are already runtime `int`s
+(defaulting from `POLY_CLIP_MIN/MAX_X/Y`, 0/0/319/199) — this part of the
+generalization is already done, just needs setting correctly.
+
+### Addressing: same fix as black3.c/black4.c
+
+Replace `(y<<8)+(y<<6)` with `PITCH_OFFSET(y)` and `320` with `DisplayPitch`
+at every site above. No `DisplayBppShift` needed — chap11-14 stay 8bpp-only
+(see Scope below), so x is still a direct byte offset. `triangleLine`'s
+`#pragma aux` span-fill (fills `xe-xs+1` bytes at whatever address it's
+given) needs **no change** — it doesn't know about resolution, only about a
+byte count and an address, both already correct once the caller's `destAddr`
+is.
+
+**`PITCH_OFFSET`/`DisplayPitch` only exist under `VBE_SUPPORT`** (`black3.h`
+declares them inside `#ifdef VBE_SUPPORT`, same as `DisplayWidth`/
+`DisplayHeight` — every `black3.c` function that uses them wraps its body
+in `#ifdef VBE_SUPPORT ... #else` with the book's original fixed-320
+addressing). `black11.c` is shared by every chap11-14 build — 16-bit,
+32-bit `DOS_32_BIT`-without-`VBE_SUPPORT`, and 32-bit `VBE_SUPPORT` — so
+referencing them unconditionally is a hard compile error outside
+`VBE_SUPPORT`, not just a latent bug. Two local macros resolve this once
+instead of an `#ifdef`/`#else` at every one of the ten call sites (several
+of which are inside a `for(...)` loop's increment clause, where a bare
+`#ifdef` can't be embedded mid-statement):
+```c
+#ifdef VBE_SUPPORT
+#define ROW_OFFSET(y) PITCH_OFFSET(y)
+#define ROW_PITCH     DisplayPitch
+#else
+#define ROW_OFFSET(y) (((y) << 6) + ((y) << 8))
+#define ROW_PITCH     320
+#endif
+```
+Every `PITCH_OFFSET(y)`/`DisplayPitch` reference in `drawLine`,
+`drawTopTriangle`, `drawBottomTriangle`, `drawTriangle2DGouraud`, and
+`drawTriangle2DText` becomes `ROW_OFFSET(y)`/`ROW_PITCH` instead.
+
+### Projection: HALF_SCREEN_WIDTH/HEIGHT and ViewingDistance must scale together
+
+Naively setting `HALF_SCREEN_WIDTH = DisplayWidth/2` while leaving
+`ViewingDistance` at its book value would **change the field of view** — FOV
+is `2*atan(HALF_SCREEN_WIDTH/ViewingDistance)`, so widening the numerator
+alone widens the FOV (fisheye-like distortion at higher resolution, not just
+more pixel density). To render the same shot at higher resolution, both must
+scale by the same factor:
+```c
+HalfScreenWidth  = DisplayWidth  / 2;
+HalfScreenHeight = DisplayHeight / 2;
+ViewingDistance  = (int)(BOOK_VIEWING_DISTANCE * ((float)DisplayWidth / 320.0f));
+```
+`HalfScreenWidth`/`HalfScreenHeight` are new runtime `int`s (`HALF_SCREEN_WIDTH`/
+`HALF_SCREEN_HEIGHT` stay as-is — same relationship as the `POLY_CLIP_MIN_X`
+macro to the `PolyClipMinX` variable above) that every projection/culling
+call site switches to reading. `ViewingDistance` scaling is the demo's own
+responsibility — same as it already picks its own book-value
+`ViewingDistance` (200 default, 250 in `wiredemo.c`/`solidemo.c`/
+`sol2demo.c`) — so each demo's existing `ViewingDistance = 250;` line becomes
+`ViewingDistance = (int)(250 * ((float)DisplayWidth / 320.0f));` under
+`VBE_SUPPORT`.
+
+### ASPECT_RATIO: a mode-13h-only correction, not a general one
+
+`ASPECT_RATIO` (0.8) and `INVERSE_ASPECT_RATIO` (1.25) correct for mode-13h's
+non-square pixels: 320×200 pixels stretched across a 4:3 CRT means each pixel
+is physically ~0.833 units wide per unit tall (`(4/3) / (320/200) = 0.833`,
+the book rounds to 0.8), so the Y-projection multiplies by that factor to
+keep world-space squares looking square on screen. Every VESA resolution
+this project targets (640×480, 1024×768) is exactly 4:3 with pixel count
+matching that ratio — **square pixels, no correction needed**. General
+formula, correct for any resolution including non-4:3 ones if this ever
+targets a widescreen VESA mode:
+```c
+AspectRatio        = (4.0f/3.0f) / ((float)DisplayWidth / DisplayHeight);
+InverseAspectRatio = 1.0f / AspectRatio;
+```
+At 640×480 or 1024×768 this evaluates to `1.0` exactly. `ASPECT_RATIO`/
+`INVERSE_ASPECT_RATIO` macros stay as the mode-13h book defaults; every call
+site switches to the runtime `AspectRatio`/`InverseAspectRatio` variables.
+
+### No demo ever calls anything - it's all internal to black11.c
+
+The first version of this design had a public `set3DViewport()` that any
+demo drawing a 3D `Object` (or calling `drawTriangle2D`) had to remember to
+call once after its mode-set. That's a bad API in practice: it makes the
+*caller* responsible for knowing an internal fact about `black11.c` -
+which of its functions happen to read `HalfScreenWidth`/`AspectRatio`/
+`PolyClip*` and which don't (`drawTriangle2DGouraud`/`drawTriangle2DText`
+don't; `drawObjectWire`/`drawObjectSolid`/`drawTriangle2D`/`drawPolyList`/
+`clipObject3D`/`removeObject` do) - a distinction nothing about a demo's
+own code makes obvious, and a wrong guess fails silently (stale clip rect
+or projection extents, not a compile error).
+
+The fix: there is no public function at all. `HalfScreenWidth`/
+`HalfScreenHeight`/`AspectRatio`/`InverseAspectRatio`/`PolyClip*` are pure
+functions of `DisplayWidth`/`DisplayHeight`, which are always valid - 320×200
+under `GRAPHICS_MODE13`, the negotiated VESA mode under `VBE_SUPPORT`. A
+`static` (file-private, not in `black11.h`) helper keeps them in sync,
+cheaply skipping the work when nothing has changed - and, since
+`DisplayWidth`/`DisplayHeight` themselves only exist under `VBE_SUPPORT`
+(same reason `PITCH_OFFSET` needed the `ROW_OFFSET`/`ROW_PITCH` wrapper
+above), the whole thing is wrapped in `#ifdef VBE_SUPPORT`, not just its
+body - a non-`VBE_SUPPORT` build has no `setGraphicsModeVesa` to ever
+change the display away from mode-13h's fixed 320×200, so the mode-13h
+defaults `HalfScreenWidth` etc. already carry are always correct and this
+mechanism should compile out to nothing there, not merely become a no-op
+function that still gets called:
+```c
+#ifdef VBE_SUPPORT
+static int CachedDisplayWidth  = MODE13_WIDTH;   // seeded to the mode-13h
+static int CachedDisplayHeight = MODE13_HEIGHT;  // default - already correct
+                                                  // for HalfScreenWidth etc.'s
+                                                  // own mode-13h-macro defaults
+
+static void resyncCachedSettings(void) {
+    if (DisplayWidth == CachedDisplayWidth && DisplayHeight == CachedDisplayHeight) {
+        return; // skip the float divide below if the display hasn't changed
+    }
+    HalfScreenWidth    = DisplayWidth  / 2;
+    HalfScreenHeight   = DisplayHeight / 2;
+    AspectRatio        = (4.0f/3.0f) / ((float)DisplayWidth / DisplayHeight);
+    InverseAspectRatio = 1.0f / AspectRatio;
+    PolyClipMinX = 0;              PolyClipMinY = 0;
+    PolyClipMaxX = DisplayWidth-1; PolyClipMaxY = DisplayHeight-1;
+    CachedDisplayWidth = DisplayWidth; CachedDisplayHeight = DisplayHeight;
+}
+#endif
+```
+`resyncCachedSettings()` is called as the first statement of every function
+that reads this state - `clipObject3D`, `removeObject`, `drawObjectWire`,
+`drawObjectSolid`, `drawPolyList`, `drawTriangle2D` - but each of those six
+call sites is itself wrapped in `#ifdef VBE_SUPPORT`/`#endif` too, for the
+same reason: under a non-`VBE_SUPPORT` build there's no function to call at
+all, so this isn't just "a cheap call that does nothing" there, it's zero
+added instructions, matching the book's original zero-overhead addressing
+exactly. Under `VBE_SUPPORT` it's always correct with zero calls from any
+demo, and the expensive `AspectRatio` division only actually reruns the
+first time a demo's frame loop touches one of those functions after a
+resolution change, not every frame. `drawTriangle2DGouraud`/
+`drawTriangle2DText` never call it at all, in any build, because they don't
+read any of this state - not because a demo author had to notice that.
+
+The perf reasoning behind caching `AspectRatio`/`InverseAspectRatio` at all
+(rather than also computing them inline everywhere, the way `HalfScreenWidth`/
+`HalfScreenHeight` safely could - `DisplayWidth >> 1` costs the same as a
+cached read): this project targets 486-era DOS hardware, some of it without
+an FPU, where a float divide can run to hundreds of cycles in software
+emulation. Recomputing it per vertex/frame would be a real cost; the
+dirty-check cache avoids that while still needing no caller involvement.
+
+Demo call sites only need `#ifdef VBE_SUPPORT` around the mode-set and
+`ViewingDistance` scaling, same shape as every existing ported demo - no
+separate viewport call at all:
+```c
+#ifdef VBE_SUPPORT
+    setGraphicsModeVesa(640, 480, 8);
+#else
+    setGraphicsMode(GRAPHICS_MODE13);
+#endif
+#ifdef VBE_SUPPORT
+    ViewingDistance = (int)(250 * ((float)DisplayWidth / 320.0f));
+#else
+    ViewingDistance = 250;
+#endif
+```
+
+### Scope
+
+8bpp only, same as every other VBE port in this repo except blazerx —
+`black11.c`'s colors are `unsigned char` palette indices baked into every
+rasterizer (`destAddr[x] = (unsigned char)color`); extending to 16/32bpp
+would need the same widened-color-type work blazerx's 2D sprites needed, and
+nothing has asked for a true-color 3-D demo. The engine fix applies
+uniformly to every chap11-14 demo that calls into `black11.c` (wireframe,
+flat, gouraud, textured) — one engine-layer fix, not a per-demo one, same
+as the black3.c/black4.c generalization applied to every 2D demo at once.
+
+### Status
+
+Both chap11 demos are ported. `chap11/linedemo.c` (wireframe only) was the
+proof of concept — it only calls `drawLine` directly, which reads none of
+`black11.c`'s resolution-aware state. `chap11/wiredemo.c` is the first demo
+to exercise the actual projection path (`drawObjectWire`, driven by a `.PLG`
+object file passed on the command line — `CUBEW.PLG`/`PYRAMIDW.PLG`, copied
+into `vbe/chap11/`): it scales its book-value `ViewingDistance = 250` by
+`DisplayWidth / 320.0f` to keep the same field of view at 640×480 (see
+"Projection: HalfScreenWidth/Height and ViewingDistance must scale
+together" above) — `HalfScreenWidth`/`AspectRatio`/the clip rect resync
+automatically the first time `drawObjectWire` runs after the mode-set, no
+call needed. It also switches from `initRomCharSet()` to
+`loadFontSet("font16.bin", 16)` for its on-screen position readout, same as
+every other `VBE_SUPPORT` demo that prints text. `chap12/tridemo.c` is
+ported next — it draws random flat triangles directly via `drawTriangle2D`
+(`drawTopTriangle`/`drawBottomTriangle`), no `Object`/projection involved,
+but the clip rect still matters: `drawTopTriangle`/`drawBottomTriangle`
+clip against `PolyClipMinX`/`MinY`/`MaxX`/`MaxY`, and `drawTriangle2D`'s own
+internal resync keeps those matching the active display rather than stuck
+at mode-13h's 0/0/319/199. `chap12/gourdemo.c` is ported too — it draws a
+single interactive gouraud-shaded triangle via `drawTriangle2DGouraud`
+directly (arrow/number keys retune each vertex's intensity), the first demo
+to exercise that function. `drawTriangle2DGouraud` doesn't read
+`PolyClipMinX`/`MinY`/`MaxX`/`MaxY`/`HalfScreenWidth`/`AspectRatio` at all,
+so nothing resyncs for it (nor should it) - but its triangle position and
+text layout are **screen-only UI** (fixed demo furniture, not a projected
+`Object`), so they follow the flat-scaling convention from "Coordinate
+constants & the camera pattern" above: every screen-relative literal
+(vertex offsets, label margins, HUD line spacing) is doubled ×(640/320) for
+X and ×(480/200) for Y under `VBE_SUPPORT`, same as `chap03/light.c`'s
+`playerX`/`playerY`. `chap12/solidemo.c` mirrors `wiredemo.c`'s port
+exactly (`plgLoadObject` from argv[1] — `CUBE.PLG`, plus a `standard.pal` 3D
+color palette, both copied into `vbe/chap12/`; `ViewingDistance` scaled by
+`DisplayWidth / 320.0f`; `loadFontSet("font16.bin", 16)`/`freeFontSet()`),
+just calling `drawObjectSolid` (backface removal + shading via
+`removeBackfacesAndShade`) instead of `drawObjectWire`. `chap12/textdemo.c`
+is the last chap12 demo — a texture-mapped triangle (`drawTriangle2DText`,
+no clip-rect/projection dependency either, same as `drawTriangle2DGouraud`)
+sampling from a 4-cell texture strip (`textures.pcx`: stone/wood/slime/
+lava). Its screen position/offsets got the same screen-only-UI doubling as
+`gourdemo.c`, but the texture atlas itself needed the **sprite sheet**
+scaling recipe from Assets below (per-cell rescale + 1px grid-line
+reconstruction, not a whole-image resize) — `spriteInit`'s cell size moves
+from 64 to 128 to match.
+
+Porting `textdemo.c` surfaced a genuine engine bug in `drawTriangle2DText`,
+independent of the addressing/projection generalization above: its texel
+sampling had its own hardcoded `63`/`64` (`xIndex = abs((int)(uCurr * 63 +
+0.5))`, `text[yIndex * 64 + xIndex]`) baked in from the book's fixed 64×64
+texture size — a *texture-stride* constant, a third category this file
+hardcoded beyond screen addressing and projection. At the book's own 64×64
+it's numerically identical to `Textures.width`/`height - 1` and `.width`,
+so it was invisible until a demo actually used a differently-sized texture
+(the VBE port's 128×128 atlas) - sampling silently stayed inside the
+top-left quarter of the bitmap with the wrong row stride, corrupting the
+output. Fixed to read `Textures.width`/`Textures.height` instead, in both
+loops - unconditional, not `VBE_SUPPORT`-gated, byte-identical at 64×64.
+
+`chap13/sol2demo.c` completes the set — it moves the camera (`ViewPoint`/
+`ViewAngle`, via `createWorldToCamera`/`worldToCameraObject`) instead of the
+object, otherwise mirroring `solidemo.c`'s port exactly (`CUBE.PLG`/
+`standard.pal` copied into `vbe/chap13/`, `ViewingDistance` scaled by
+`DisplayWidth / 320.0f`, `loadFontSet`/`freeFontSet`). It prints two
+stacked `printStringDb` lines (viewpoint, view angle) 10px apart in the
+book - with `font16.bin`'s 16px-tall glyphs that would overlap, so the
+line spacing doubles to 20 under `VBE_SUPPORT`, same reasoning as
+`gourdemo.c`'s HUD spacing.
+
+All 7 chap11-13 demos are now ported (`linedemo`, `wiredemo`, `tridemo`,
+`gourdemo`, `solidemo`, `textdemo`, `sol2demo`), exercising every rasterizer
+path this design covers: wireframe, flat, gouraud, textured, and both
+object-movement and camera-movement solid viewers.
+
+A review after porting turned up a real, build-breaking oversight in the
+engine work above: `PITCH_OFFSET`/`DisplayPitch`/`DisplayWidth`/
+`DisplayHeight` only exist under `VBE_SUPPORT` (`black3.h`), but the
+initial `black11.c` generalization referenced them unconditionally - a hard
+compile error for the 16-bit and plain-32-bit (`DOS_32_BIT` without
+`VBE_SUPPORT`) builds every chap11-13 demo also ships as. Fixed with local
+`ROW_OFFSET`/`ROW_PITCH` macros (see "Addressing: same fix as
+black3.c/black4.c" above) and by wrapping `resyncCachedSettings()` and its
+six call sites entirely in `#ifdef VBE_SUPPORT`, so a non-`VBE_SUPPORT`
+build compiles away the whole mechanism rather than paying for a call that
+does nothing.
+
+`chap14/objects.c` is also ported, reusing `black11.c` directly - chap14
+has no separate engine snapshot of its own. It's `sol2demo.c`'s camera
+pattern plus `removeObject`'s bounding-sphere culling test
+(`OBJECT_CULL_XYZ_MODE`, first demo in this project to exercise it), four
+objects arranged side by side. Its "Objects Removed" status line and
+per-object index labels sit near the bottom of the screen (book y=180 of
+200) and scale the same way as `gourdemo.c`'s HUD (×2 X, ×2.4 Y, plus the
+10→20 line-spacing bump for `font16.bin`). Note: the existing
+`32bit/chap14/objects.tgt` links `black15.c`/`black15.h` even though
+`objects.c` neither includes `black15.h` nor calls any of its functions
+(`drawTbTri3DZ`, `createZBuffer`, `bspWorldToCamera`, etc.) - an extraneous
+dependency from earlier module-list work, not carried into
+`vbe/chap14/objects.tgt`.
+
+---
+
 ## Roadmap
 
 - **Phase 1 — 2D** ✓: chap03, chap04, chap05, chap07, chap08, chap09 (Starblazer —
   the first full-game port; introduced the camera pattern above and
   `waitForVerticalRetrace`).
-- **Phase 2 — 3D**: chap11–18 (`black11`/`black15`/`black17`/`black18`) remain
-  explicitly out of scope for this VESA work — nothing there has been touched
-  or ported yet. Apply the camera pattern to chap17 (Starblazer 3-D) and
-  chap18 (Kill or Be Killed) when that work starts, same as chap09.
+- **Phase 2 — 3D** ✓ (chap11-14): chap11–18 (`black11`/`black15`/`black17`/
+  `black18`) remain otherwise unported. chap11-13 (`black11`) are fully
+  ported — see "chap11: 3-D projection & the resolution-aware rasterizer"
+  above for the design, and its Status section for the demo-by-demo
+  breakdown. chap14/objects.c is ported too (reuses `black11.c` directly,
+  no separate engine snapshot). chap15/17/18 (`black15`/`black17`/`black18`)
+  are still undesigned. Apply the camera pattern to chap17 (Starblazer 3-D)
+  and chap18 (Kill or Be Killed) when that work starts, same as chap09.
 
 ### chap08 notes
 

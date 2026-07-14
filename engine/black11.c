@@ -19,6 +19,18 @@
 #include <black9.h>
 #include <black11.h>
 
+// resolves to the current row's byte offset/pitch, whichever way this build
+// computes it. PITCH_OFFSET/DisplayPitch (black3.h) only exist under
+// VBE_SUPPORT - the #else mirrors the book's own fixed mode-13h addressing
+// (320 = (1<<8)+(1<<6)), same as every non-VBE_SUPPORT function in black3.c.
+#ifdef VBE_SUPPORT
+#define ROW_OFFSET(y) PITCH_OFFSET(y)
+#define ROW_PITCH     DisplayPitch
+#else
+#define ROW_OFFSET(y) (((y) << 6) + ((y) << 8))
+#define ROW_PITCH     320
+#endif
+
 float ClipNearZ = 100,                                      // the near or hither clipping plane
       ClipFarZ = 3000,                                      // the far or yon clipping plane
       ScreenWidth = 320,                                    // dimensions of the screen
@@ -49,7 +61,55 @@ int PolyClipMinX = POLY_CLIP_MIN_X,
     PolyClipMaxX = POLY_CLIP_MAX_X,
     PolyClipMaxY = POLY_CLIP_MAX_Y;
 
+// projection constants - default to the mode-13h macros, kept in sync with
+// the active display by resyncCachedSettings() below
+int HalfScreenWidth      = HALF_SCREEN_WIDTH;
+int HalfScreenHeight     = HALF_SCREEN_HEIGHT;
+float AspectRatio        = ASPECT_RATIO;
+float InverseAspectRatio = INVERSE_ASPECT_RATIO;
+
 Sprite Textures; // this holds the textures
+
+#ifdef VBE_SUPPORT
+// last DisplayWidth/DisplayHeight the projection constants and clip rect
+// were computed for - seeded to the mode-13h default, which is already
+// what HalfScreenWidth/HalfScreenHeight/AspectRatio/InverseAspectRatio/
+// PolyClip* above are correct for, so no resync is needed until something
+// actually changes the display.
+static int CachedDisplayWidth  = MODE13_WIDTH;
+static int CachedDisplayHeight = MODE13_HEIGHT;
+
+// called internally by every black11.c function that reads
+// HalfScreenWidth/HalfScreenHeight/AspectRatio/InverseAspectRatio/
+// PolyClip* - keeps them correct for the active display without requiring
+// any caller outside this file to know they exist. Only exists under
+// VBE_SUPPORT: without it there's no setGraphicsModeVesa to ever change
+// the display away from mode-13h's fixed 320x200, so the mode-13h defaults
+// above are always correct and every call site below compiles out to
+// nothing - not even an empty call, since the #ifdef there drops the call
+// entirely, matching the book's original zero-overhead addressing.
+// AspectRatio exists to correct mode-13h's non-square pixels (320x200
+// stretched across a 4:3 CRT); VESA modes at true 4:3 pixel counts
+// (640x480, 1024x768) have square pixels, so it evaluates to 1.0 there.
+static void resyncCachedSettings(void) {
+    if (DisplayWidth == CachedDisplayWidth && DisplayHeight == CachedDisplayHeight) {
+        return; // nothing has changed since the last check - skip the float divide
+    }
+
+    HalfScreenWidth = DisplayWidth / 2;
+    HalfScreenHeight = DisplayHeight / 2;
+    AspectRatio = (4.0f / 3.0f) / ((float)DisplayWidth / (float)DisplayHeight);
+    InverseAspectRatio = 1.0f / AspectRatio;
+
+    PolyClipMinX = 0;
+    PolyClipMinY = 0;
+    PolyClipMaxX = DisplayWidth - 1;
+    PolyClipMaxY = DisplayHeight - 1;
+
+    CachedDisplayWidth = DisplayWidth;
+    CachedDisplayHeight = DisplayHeight;
+}
+#endif
 
 int loadPaletteDisk(char* filename, RgbPalettePtr palette) {
     // this function loads a color palette from disk
@@ -1093,6 +1153,10 @@ void clipObject3D(ObjectPtr object, int mode) {
           x4Compare,
           y4Compare;
 
+#ifdef VBE_SUPPORT
+    resyncCachedSettings();
+#endif
+
     // test if trivial z clipping is being requested
     if (mode == CLIP_Z_MODE) {
         // attempt to clip each polygon against viewing volume
@@ -1153,10 +1217,10 @@ void clipObject3D(ObjectPtr object, int mode) {
                 }
 
                 // pre-compute x comparison ranges
-                x1Compare = (HALF_SCREEN_WIDTH * z1) / ViewingDistance;
-                x2Compare = (HALF_SCREEN_WIDTH * z2) / ViewingDistance;
-                x3Compare = (HALF_SCREEN_WIDTH * z3) / ViewingDistance;
-                x4Compare = (HALF_SCREEN_WIDTH * z4) / ViewingDistance;
+                x1Compare = (HalfScreenWidth * z1) / ViewingDistance;
+                x2Compare = (HalfScreenWidth * z2) / ViewingDistance;
+                x3Compare = (HalfScreenWidth * z3) / ViewingDistance;
+                x4Compare = (HalfScreenWidth * z4) / ViewingDistance;
 
                 // perform x test
                 if (!((x1 > x1Compare || x2 > -x2Compare || x3 > -x3Compare || x4 > -x4Compare) &&
@@ -1168,10 +1232,10 @@ void clipObject3D(ObjectPtr object, int mode) {
                 }
 
                 // pre-compute x comparison ranges
-                y1Compare = (HALF_SCREEN_HEIGHT * z1) / ViewingDistance;
-                y2Compare = (HALF_SCREEN_HEIGHT * z2) / ViewingDistance;
-                y3Compare = (HALF_SCREEN_HEIGHT * z3) / ViewingDistance;
-                y4Compare = (HALF_SCREEN_HEIGHT * z4) / ViewingDistance;
+                y1Compare = (HalfScreenHeight * z1) / ViewingDistance;
+                y2Compare = (HalfScreenHeight * z2) / ViewingDistance;
+                y3Compare = (HalfScreenHeight * z3) / ViewingDistance;
+                y4Compare = (HalfScreenHeight * z4) / ViewingDistance;
 
                 // perform x test
                 if (!((y1 > -y1Compare || y2 > -y1Compare || y3 > -y3Compare || y4 > -y4Compare) &&
@@ -1196,9 +1260,9 @@ void clipObject3D(ObjectPtr object, int mode) {
                 }
 
                 // pre-compute x comparison ranges
-                x1Compare = (HALF_SCREEN_WIDTH * z1) / ViewingDistance;
-                x2Compare = (HALF_SCREEN_WIDTH * z2) / ViewingDistance;
-                x3Compare = (HALF_SCREEN_WIDTH * z3) / ViewingDistance;
+                x1Compare = (HalfScreenWidth * z1) / ViewingDistance;
+                x2Compare = (HalfScreenWidth * z2) / ViewingDistance;
+                x3Compare = (HalfScreenWidth * z3) / ViewingDistance;
 
                 // perform x test
                 if (!((x1 > -x1Compare || x2 > -x2Compare || x3 > -x3Compare) &&
@@ -1210,9 +1274,9 @@ void clipObject3D(ObjectPtr object, int mode) {
                 }
 
                 // pre-compute x comparison ranges
-                y1Compare = (HALF_SCREEN_HEIGHT * z1) / ViewingDistance;
-                y2Compare = (HALF_SCREEN_HEIGHT * z2) / ViewingDistance;
-                y3Compare = (HALF_SCREEN_HEIGHT * z3) / ViewingDistance;
+                y1Compare = (HalfScreenHeight * z1) / ViewingDistance;
+                y2Compare = (HalfScreenHeight * z2) / ViewingDistance;
+                y3Compare = (HalfScreenHeight * z3) / ViewingDistance;
 
                 // perform x test
                 if (!((y1 > -y1Compare || y2 > -y2Compare || y3 > -y3Compare) &&
@@ -1335,6 +1399,10 @@ int removeObject(ObjectPtr object, int mode) {
           xCompare,     // the extents of the clipping volume in x and y at the
           yCompare;     // bounding spheres current z
 
+#ifdef VBE_SUPPORT
+    resyncCachedSettings();
+#endif
+
     // first transform world position of object into camera coordinates
 
     // compute x component
@@ -1380,7 +1448,7 @@ int removeObject(ObjectPtr object, int mode) {
 
         // test against x right and left planes, first compute viewing volume
         // extents at position z position of bounding sphere
-        xCompare = (HALF_SCREEN_WIDTH * zBSphere) / ViewingDistance;
+        xCompare = (HalfScreenWidth * zBSphere) / ViewingDistance;
 
         if (((xBSphere - radius) > xCompare) ||
             ((xBSphere + radius) < -xCompare)) {
@@ -1388,7 +1456,7 @@ int removeObject(ObjectPtr object, int mode) {
             return 1;
         }
 
-        yCompare = (INVERSE_ASPECT_RATIO * HALF_SCREEN_HEIGHT * zBSphere) / ViewingDistance;
+        yCompare = (InverseAspectRatio * HalfScreenHeight * zBSphere) / ViewingDistance;
 
         if (((yBSphere - radius) > yCompare) ||
             ((yBSphere + radius) < -yCompare)) {
@@ -1534,7 +1602,7 @@ void drawLine(
         index;      // used for looping
 
     // pre-compute first pixel address in video buffer
-    vbStart = vbStart + ((y0 << 6) + (y0 << 8) + x0);
+    vbStart = vbStart + (ROW_OFFSET(y0) + x0);
 
     // compute horizontal and vertical deltas
     dx = x1 - x0;
@@ -1550,9 +1618,9 @@ void drawLine(
 
     // test y component of slope
     if (dy >= 0) {
-        yInc = 320; // 320 bytes per line
+        yInc = ROW_PITCH;
     } else {
-        yInc = -320;
+        yInc = -ROW_PITCH;
         dy = -dy;   // need absolute value
     }
 
@@ -1610,6 +1678,10 @@ void drawObjectWire(ObjectPtr object) {
     int ix1, iy1,
         ix2, iy2;
 
+#ifdef VBE_SUPPORT
+    resyncCachedSettings();
+#endif
+
     // compute position of object in world
     for (currPoly = 0; currPoly < object->numPolys; currPoly++) {
         // is this polygon visible?
@@ -1634,11 +1706,11 @@ void drawObjectWire(ObjectPtr object) {
             z2 = object->verticesCamera[vertex].z;
 
             // convert to screen coordinates
-            x1 = HALF_SCREEN_WIDTH + x1 * ViewingDistance / z1;
-            y1 = HALF_SCREEN_HEIGHT - ASPECT_RATIO * y1 * ViewingDistance / z1;
+            x1 = HalfScreenWidth + x1 * ViewingDistance / z1;
+            y1 = HalfScreenHeight - AspectRatio * y1 * ViewingDistance / z1;
 
-            x2 = HALF_SCREEN_WIDTH + x2 * ViewingDistance / z2;
-            y2 = HALF_SCREEN_HEIGHT - ASPECT_RATIO * y2 * ViewingDistance / z2;
+            x2 = HalfScreenWidth + x2 * ViewingDistance / z2;
+            y2 = HalfScreenHeight - AspectRatio * y2 * ViewingDistance / z2;
 
             // convert floats to integers for line clipper
             ix1 = (int)x1;
@@ -1664,8 +1736,8 @@ void drawObjectWire(ObjectPtr object) {
         z2 = object->verticesCamera[vertex].z;
 
         // compute screen coordinates
-        x2 = HALF_SCREEN_WIDTH + x2 * ViewingDistance / z2;
-        y2 = HALF_SCREEN_HEIGHT - ASPECT_RATIO * y2 * ViewingDistance / z2;
+        x2 = HalfScreenWidth + x2 * ViewingDistance / z2;
+        y2 = HalfScreenHeight - AspectRatio * y2 * ViewingDistance / z2;
 
         // convert floats to integers
         ix2 = (int)x2;
@@ -1691,6 +1763,10 @@ void drawObjectSolid(ObjectPtr object) {
           x2, y2, z2,
           x3, y3, z3,
           x4, y4, z4;
+
+#ifdef VBE_SUPPORT
+    resyncCachedSettings();
+#endif
 
     // compute position of object in world
     for (currPoly = 0; currPoly < object->numPolys; currPoly++) {
@@ -1743,14 +1819,14 @@ void drawObjectSolid(ObjectPtr object) {
         y3 = object->verticesCamera[vertex3].y;
 
         // compute screen position of points
-        x1 = HALF_SCREEN_WIDTH + x1 * ViewingDistance / z1;
-        y1 = HALF_SCREEN_HEIGHT - ASPECT_RATIO * y1 * ViewingDistance / z1;
+        x1 = HalfScreenWidth + x1 * ViewingDistance / z1;
+        y1 = HalfScreenHeight - AspectRatio * y1 * ViewingDistance / z1;
 
-        x2 = HALF_SCREEN_WIDTH + x2 * ViewingDistance / z2;
-        y2 = HALF_SCREEN_HEIGHT - ASPECT_RATIO * y2 * ViewingDistance / z2;
+        x2 = HalfScreenWidth + x2 * ViewingDistance / z2;
+        y2 = HalfScreenHeight - AspectRatio * y2 * ViewingDistance / z2;
 
-        x3 = HALF_SCREEN_WIDTH + x3 * ViewingDistance / z3;
-        y3 = HALF_SCREEN_HEIGHT - ASPECT_RATIO * y3 * ViewingDistance / z3;
+        x3 = HalfScreenWidth + x3 * ViewingDistance / z3;
+        y3 = HalfScreenHeight - AspectRatio * y3 * ViewingDistance / z3;
 
         // draw triangle
         drawTriangle2D(x1, y1, x2, y2, x3, y3, object->polys[currPoly].shade);
@@ -1762,8 +1838,8 @@ void drawObjectSolid(ObjectPtr object) {
             y4 = object->verticesCamera[vertex4].y;
 
             // project to screen
-            x4 = HALF_SCREEN_WIDTH + x4 * ViewingDistance / z4;
-            y4 = HALF_SCREEN_HEIGHT - ASPECT_RATIO * y4 * ViewingDistance / z4;
+            x4 = HalfScreenWidth + x4 * ViewingDistance / z4;
+            y4 = HalfScreenHeight - AspectRatio * y4 * ViewingDistance / z4;
 
             // draw triangle
             drawTriangle2D(x1, y1, x3, y3, x4, y4, object->polys[currPoly].shade);
@@ -1780,6 +1856,10 @@ void drawPolyList(void) {
           x2, y2, z2,
           x3, y3, z3,
           x4, y4, z4;
+
+#ifdef VBE_SUPPORT
+    resyncCachedSettings();
+#endif
 
     // draw each polygon in list
     for (currPoly = 0; currPoly < NumPolysFrame; currPoly++) {
@@ -1822,14 +1902,14 @@ void drawPolyList(void) {
         y3 = WorldPolys[currPoly]->vertexList[2].y;
 
         // compute screen position of points
-        x1 = (HALF_SCREEN_WIDTH + x1 * ViewingDistance / z1);
-        y1 = (HALF_SCREEN_HEIGHT - ASPECT_RATIO * y1 * ViewingDistance / z1);
+        x1 = (HalfScreenWidth + x1 * ViewingDistance / z1);
+        y1 = (HalfScreenHeight - AspectRatio * y1 * ViewingDistance / z1);
 
-        x2 = (HALF_SCREEN_WIDTH + x2 * ViewingDistance / z2);
-        y2 = (HALF_SCREEN_HEIGHT - ASPECT_RATIO * y2 * ViewingDistance / z2);
+        x2 = (HalfScreenWidth + x2 * ViewingDistance / z2);
+        y2 = (HalfScreenHeight - AspectRatio * y2 * ViewingDistance / z2);
 
-        x3 = (HALF_SCREEN_WIDTH + x3 * ViewingDistance / z3);
-        y3 = (HALF_SCREEN_HEIGHT - ASPECT_RATIO * y3 * ViewingDistance / z3);
+        x3 = (HalfScreenWidth + x3 * ViewingDistance / z3);
+        y3 = (HalfScreenHeight - AspectRatio * y3 * ViewingDistance / z3);
 
         // draw triangle
         drawTriangle2D(
@@ -1848,8 +1928,8 @@ void drawPolyList(void) {
             y4 = WorldPolys[currPoly]->vertexList[3].y;
 
             // project to screen
-            x4 = (HALF_SCREEN_WIDTH + x4 * ViewingDistance / z4);
-            y4 = (HALF_SCREEN_HEIGHT - ASPECT_RATIO * y4 * ViewingDistance / z4);
+            x4 = (HalfScreenWidth + x4 * ViewingDistance / z4);
+            y4 = (HalfScreenHeight - AspectRatio * y4 * ViewingDistance / z4);
 
             // draw triangle
             drawTriangle2D(
@@ -1873,6 +1953,10 @@ void drawTriangle2D(
     int tempX,
         tempY,
         newX;
+
+#ifdef VBE_SUPPORT
+    resyncCachedSettings();
+#endif
 
     // test for h lines and v lines
     if (x1 == x2 && x2 == x3 || y1 == y2 && y2 == y3) {
@@ -1981,7 +2065,7 @@ void drawTopTriangle(
     }
 
     // compute starting address in video memory
-    destAddr = DoubleBuffer + (y1 << 8) + (y1 << 6);
+    destAddr = DoubleBuffer + ROW_OFFSET(y1);
 
     // test if x clipping is needed
     if (x1 >= PolyClipMinX && x1 <= PolyClipMaxX &&
@@ -1989,7 +2073,7 @@ void drawTopTriangle(
         x3 >= PolyClipMinX && x3 <= PolyClipMaxX) {
 
         // draw the triangle
-        for (tempY = y1; tempY <= y3; tempY++, destAddr += 320) {
+        for (tempY = y1; tempY <= y3; tempY++, destAddr += ROW_PITCH) {
             triangleLine(destAddr, (unsigned int)xs, (unsigned int)xe, color);
 
             // adjust starting point and ending point
@@ -2000,7 +2084,7 @@ void drawTopTriangle(
         // clip x axis with slower version
 
         // draw the triangle
-        for (tempY = y1; tempY <= y3; tempY++, destAddr += 320) {
+        for (tempY = y1; tempY <= y3; tempY++, destAddr += ROW_PITCH) {
             // do x clip
             left = (int)xs;
             right = (int)xe;
@@ -2080,7 +2164,7 @@ void drawBottomTriangle(
     }
 
     // compute starting address in video memory
-    destAddr = DoubleBuffer + (y1 << 8) + (y1 << 6);
+    destAddr = DoubleBuffer + ROW_OFFSET(y1);
 
     // test if x clipping is needed
     if (x1 >= PolyClipMinX && x1 <= PolyClipMaxX &&
@@ -2088,7 +2172,7 @@ void drawBottomTriangle(
         x3 >= PolyClipMinX && x3 <= PolyClipMaxX) {
 
         // draw the triangle
-        for (tempY = y1; tempY <= y3; tempY++, destAddr += 320) {
+        for (tempY = y1; tempY <= y3; tempY++, destAddr += ROW_PITCH) {
             triangleLine(destAddr, (unsigned int)xs, (unsigned int)xe, color);
 
             // adjust starting point and ending point
@@ -2099,7 +2183,7 @@ void drawBottomTriangle(
         // clip x axis with slower version
 
         // draw the triangle
-        for (tempY = y1; tempY <= y3; tempY++, destAddr += 320) {
+        for (tempY = y1; tempY <= y3; tempY++, destAddr += ROW_PITCH) {
             // do x clip
             left = (int)xs;
             right = (int)xe;
@@ -2269,10 +2353,10 @@ void drawTriangle2DGouraud(
     deltaY31 = 1.0f / (float)(y3 - y1);
 
     // compute starting address in video memory
-    destAddr = buffer + (y1 << 8) + (y1 << 6);
+    destAddr = buffer + ROW_OFFSET(y1);
 
     // draw the triangle using Gouraud shading
-    for (y = y1; y <= bottom1; y++, destAddr += 320) {
+    for (y = y1; y <= bottom1; y++, destAddr += ROW_PITCH) {
         // compute left and right edge intensities as a function of y
         intensityLeft = deltaY21 * (float)((y2 - y) * intensity1 + (y - y1) * intensity2);
         intensityRight = deltaY31 * (float)((y3 - y) * intensity1 + (y - y1) * intensity3);
@@ -2301,7 +2385,7 @@ void drawTriangle2DGouraud(
     }
 
     // draw remainder of triangle
-    for (y--; y <= bottom2; y++, destAddr += 320) {
+    for (y--; y <= bottom2; y++, destAddr += ROW_PITCH) {
         // compute left and right edge intensities as a function of y
         intensityLeft = (float)((y3 - y) * intensity2 + (y - y2) * intensity3) / (float)(y3 - y2);
         intensityRight = deltaY31 * (float)((y3 - y) * intensity1 + (y - y1) * intensity3);
@@ -2408,11 +2492,11 @@ void drawTriangle2DText(
     deltaVY = c * dxLeft + d;
 
     // compute starting address in video memory
-    destAddr = buffer + (y1 << 8) + (y1 << 6);
+    destAddr = buffer + ROW_OFFSET(y1);
 
     // draw the triangle
 
-    for (y = y1; y <= bottom1; y++, destAddr += 320) {
+    for (y = y1; y <= bottom1; y++, destAddr += ROW_PITCH) {
         // start off working texture coordinates for current row
         uCurr = uStart;
         vCurr = vStart;
@@ -2420,12 +2504,16 @@ void drawTriangle2DText(
         // draw line
 
         for (x = (int)xs; x <= (int)xe; x++) {
-            xIndex = abs((int)(uCurr * 63 + 0.5));
-            yIndex = abs((int)(vCurr * 63 + 0.5));
+            // scale by (texture size - 1), not a hardcoded 63/64 - the
+            // book's textures were always 64x64, but Textures.width/height
+            // are whatever the active spriteInit() call actually set (e.g.
+            // 128x128 under VBE_SUPPORT's rescaled texture atlas)
+            xIndex = abs((int)(uCurr * (Textures.width - 1) + 0.5));
+            yIndex = abs((int)(vCurr * (Textures.height - 1) + 0.5));
 
             // printf("u=%d v=%d  ", xIndex, yIndex);
 
-            destAddr[x] = text[yIndex * 64 + xIndex];
+            destAddr[x] = text[yIndex * Textures.width + xIndex];
 
             // adjust x texture coordinates
             uCurr += a;
@@ -2455,19 +2543,19 @@ void drawTriangle2DText(
     deltaVY = c * dxLeft + d;
 
     // draw remainder of triangle
-    for (y--; y <= bottom2; y++, destAddr += 320) {
+    for (y--; y <= bottom2; y++, destAddr += ROW_PITCH) {
         // start off working texture coordinates for current row
         uCurr = uStart;
         vCurr = vStart;
 
         // draw line
         for (x = (int)xs; x <= (int)xe; x++) {
-            // scale each texture coordinate by 64 since textures are 64x64
-            xIndex = (int)(uCurr * 63);
-            yIndex = (int)(vCurr * 63);
+            // scale by (texture size - 1) - see the matching comment above
+            xIndex = (int)(uCurr * (Textures.width - 1));
+            yIndex = (int)(vCurr * (Textures.height - 1));
 
             // plot texel on screen
-            destAddr[x] = text[yIndex * 64 + xIndex];
+            destAddr[x] = text[yIndex * Textures.width + xIndex];
 
             // adjust x texture coordinates
             uCurr += a;

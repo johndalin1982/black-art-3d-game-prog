@@ -12,10 +12,10 @@
 #define GOURAUD_SHADING         2 // actually metallic under PLG definition
 #define SPFX_SHADING            3
 
-#define ASPECT_RATIO            ((float)0.8)    // the aspect ratio
-#define INVERSE_ASPECT_RATIO    ((float)1.25)   // the inverse of the aspect ratio
+#define ASPECT_RATIO            ((float)0.8)    // the aspect ratio - mode-13h default
+#define INVERSE_ASPECT_RATIO    ((float)1.25)   // the inverse of the aspect ratio - mode-13h default
 
-#define HALF_SCREEN_WIDTH       160 // center of screen
+#define HALF_SCREEN_WIDTH       160 // center of screen - mode-13h default
 #define HALF_SCREEN_HEIGHT      100
 
 #define POLY_CLIP_MIN_X         0   // minimum x,y clip values
@@ -139,6 +139,16 @@ extern int PolyClipMinX,
            PolyClipMinY,
            PolyClipMaxX,
            PolyClipMaxY;
+
+// projection constants used in place of HALF_SCREEN_WIDTH/HEIGHT and
+// ASPECT_RATIO/INVERSE_ASPECT_RATIO everywhere in black11.c - default to
+// the mode-13h macros above, kept in sync with the active display
+// internally (see resyncCachedSettings() in black11.c) - nothing outside
+// this file needs to (or can) refresh them directly
+extern int HalfScreenWidth;      // HALF_SCREEN_WIDTH, resolution-aware
+extern int HalfScreenHeight;     // HALF_SCREEN_HEIGHT, resolution-aware
+extern float AspectRatio;        // ASPECT_RATIO, resolution-aware
+extern float InverseAspectRatio; // INVERSE_ASPECT_RATIO, resolution-aware
 
 extern Sprite Textures; // this holds the textures
 

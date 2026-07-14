@@ -23,19 +23,35 @@ PcxPicture ImagePcx;    // general PCX image used to load background and imagery
 void main(void) {
     int done = 0,
         index,
-        x = 140,
-        y = 100,
+#ifdef VBE_SUPPORT
+        // fixed demo layout, doubled to (roughly) the same visual size and
+        // position on the bigger screen: x by 640/320, y by 480/200
+        x = 280, y = 240,
+        xOff2 = -100, yOff2 = 144,
+        xOff3 = 60, yOff3 = 192,
+        cellSize = 128,
+#else
+        x = 140, y = 100,
+        xOff2 = -50, yOff2 = 60,
+        xOff3 = 30, yOff3 = 80,
+        cellSize = 64,
+#endif
         currTexture = 0;
 
-    // set graphics mode to 13h
+    // set graphics mode
+#ifdef VBE_SUPPORT
+    setGraphicsModeVesa(640, 480, 8);
+#else
     setGraphicsMode(GRAPHICS_MODE13);
+#endif
 
-    // load in the text textures 64x64
+    // load in the text textures - textures.pcx is a resolution-scaled copy
+    // under vbe/chap12/ (128x128 cells vs. the book's 64x64)
     pcxInit(&ImagePcx);
     pcxLoad("textures.pcx", &ImagePcx, 1);
 
     // initialize the texture sprite
-    spriteInit(&Textures, 0, 0, 64, 64, 0, 0, 0, 0, 0, 0);
+    spriteInit(&Textures, 0, 0, cellSize, cellSize, 0, 0, 0, 0, 0, 0);
 
     // extract the bitmaps for the textures (four of them: sone, wood, slime, lava)
     for (index = 0; index < 4; index++) {
@@ -47,19 +63,19 @@ void main(void) {
 
     // draw textures on screen so user can see what is going on
     spriteDraw(&Textures, VideoBuffer, 1);
-    Textures.x += 64;
+    Textures.x += cellSize;
     Textures.currFrame++;
 
     spriteDraw(&Textures, VideoBuffer, 1);
-    Textures.x += 64;
+    Textures.x += cellSize;
     Textures.currFrame++;
 
     spriteDraw(&Textures, VideoBuffer, 1);
-    Textures.x += 64;
+    Textures.x += cellSize;
     Textures.currFrame++;
 
     // draw textured triangle
-    drawTriangle2DText(x, y, x - 50, y + 60, x + 30, y + 80, VideoBuffer, currTexture);
+    drawTriangle2DText(x, y, x + xOff2, y + yOff2, x + xOff3, y + yOff3, VideoBuffer, currTexture);
 
     // main loop
     while (!done) {
@@ -83,7 +99,7 @@ void main(void) {
             }
 
             // draw textured triangle
-            drawTriangle2DText(x, y, x - 50, y + 60, x + 30, y + 80, VideoBuffer, currTexture);
+            drawTriangle2DText(x, y, x + xOff2, y + yOff2, x + xOff3, y + yOff3, VideoBuffer, currTexture);
         }
     }
 
